@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import PriceChart from "@/components/PriceChart";
+import CandleChart from "@/components/CandleChart";
 
 const COINS = [
   { id: "bitcoin", label: "Bitcoin (BTC)" },
@@ -17,27 +17,30 @@ const COINS = [
   { id: "litecoin", label: "Litecoin (LTC)" },
 ];
 
-type PricePoint = { date: string; price: number };
+const TIMEFRAMES = [
+  { id: "1h", label: "1 Hora" },
+  { id: "4h", label: "4 Horas" },
+  { id: "1d", label: "1 Día" },
+];
+
+type Candle = { time: number; open: number; high: number; low: number; close: number };
 
 export default function Graficos() {
   const [coin, setCoin] = useState("bitcoin");
-  const [history, setHistory] = useState<PricePoint[]>([]);
-  const [currentPrice, setCurrentPrice] = useState<number | null>(null);
-  const [rsi, setRsi] = useState<number | null>(null);
+  const [timeframe, setTimeframe] = useState("1d");
+  const [candles, setCandles] = useState<Candle[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
-    fetch(`/api/analysis?coin=${coin}`)
+    fetch(`/api/candles?coin=${coin}&tf=${timeframe}`)
       .then((res) => res.json())
       .then((data) => {
-        setHistory(data.history || []);
-        setCurrentPrice(data.currentPrice ?? null);
-        setRsi(data.rsi ?? null);
+        setCandles(data.candles || []);
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [coin]);
+  }, [coin, timeframe]);
 
   return (
     <main className="min-h-screen bg-slate-950 text-white flex flex-col">
@@ -45,7 +48,7 @@ export default function Graficos() {
         <div className="max-w-[1600px] mx-auto flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold">📊 InvestPanel</h1>
-            <p className="text-slate-400 text-sm">Gráficos en tiempo real</p>
+            <p className="text-slate-400 text-sm">Gráficos de velas en tiempo real</p>
           </div>
           <Link href="/" className="text-sm text-slate-400 hover:text-white transition">
             ← Volver al panel
@@ -54,7 +57,7 @@ export default function Graficos() {
       </header>
 
       <div className="max-w-[1600px] mx-auto px-6 py-6 w-full flex-1 flex flex-col">
-        <div className="flex flex-wrap gap-2 mb-4">
+        <div className="flex flex-wrap gap-2 mb-3">
           {COINS.map((c) => (
             <button
               key={c.id}
@@ -70,31 +73,33 @@ export default function Graficos() {
           ))}
         </div>
 
-        <div className="flex items-baseline gap-4 mb-3">
-          <h2 className="text-2xl font-bold">
-            {COINS.find((c) => c.id === coin)?.label}
-          </h2>
-          {currentPrice && (
-            <span className="text-xl font-mono text-slate-300">
-              ${currentPrice.toLocaleString()}
-            </span>
-          )}
-          {rsi !== null && (
-            <span className="text-sm text-slate-500">RSI: {rsi}</span>
-          )}
+        <div className="flex gap-2 mb-4">
+          {TIMEFRAMES.map((tf) => (
+            <button
+              key={tf.id}
+              onClick={() => setTimeframe(tf.id)}
+              className={`px-4 py-1.5 rounded-lg text-sm font-medium transition ${
+                timeframe === tf.id
+                  ? "bg-slate-700 text-white border border-slate-600"
+                  : "bg-slate-900 text-slate-400 border border-slate-800 hover:bg-slate-800"
+              }`}
+            >
+              {tf.label}
+            </button>
+          ))}
         </div>
+
+        <h2 className="text-2xl font-bold mb-3">
+          {COINS.find((c) => c.id === coin)?.label}
+        </h2>
 
         <div className="bg-slate-900 rounded-2xl border border-slate-800 h-[600px] p-4">
           {loading ? (
             <div className="h-full flex items-center justify-center text-slate-500">
-              Cargando gráfico...
+              Cargando velas...
             </div>
-          ) : history.length > 0 ? (
-            <PriceChart data={history} />
           ) : (
-            <div className="h-full flex items-center justify-center text-slate-500">
-              No hay datos disponibles
-            </div>
+            <CandleChart candles={candles} />
           )}
         </div>
 
