@@ -84,7 +84,7 @@ export default function Graficos() {
           )}
         </div>
 
-        <div className="bg-slate-900 rounded-2xl border border-slate-800 flex-1 min-h-[600px] p-4">
+        <div className="bg-slate-900 rounded-2xl border border-slate-800 h-[600px] p-4">
           {loading ? (
             <div className="h-full flex items-center justify-center text-slate-500">
               Cargando gráfico...
