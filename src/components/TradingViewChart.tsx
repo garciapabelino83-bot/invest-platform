@@ -29,7 +29,7 @@ function TradingViewChart({ symbol = "BINANCE:BTCUSDT" }: { symbol?: string }) {
   }, [symbol]);
 
   return (
-    <div className="tradingview-widget-container h-[500px]" ref={container}>
+    <div className="tradingview-widget-container h-[80vh] min-h-[600px]" ref={container}>
       <div className="tradingview-widget-container__widget h-full"></div>
     </div>
   );
