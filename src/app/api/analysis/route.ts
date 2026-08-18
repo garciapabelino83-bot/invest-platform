@@ -46,6 +46,13 @@ const COINGECKO_IDS: Record<string, string> = {
   bitcoin: "bitcoin",
   ethereum: "ethereum",
   solana: "solana",
+  cardano: "cardano",
+  ripple: "ripple",
+  dogecoin: "dogecoin",
+  polkadot: "polkadot",
+  avalanche: "avalanche-2",
+  chainlink: "chainlink",
+  litecoin: "litecoin",
 };
 
 export async function GET(request: Request) {
@@ -74,6 +81,12 @@ export async function GET(request: Request) {
   const sma30 = calculateSMA(prices, 30);
   const currentPrice = prices[prices.length - 1];
 
+  // Historial diario para graficar (fecha + precio)
+  const history = data.prices.map((p: [number, number]) => ({
+    date: new Date(p[0]).toISOString().split("T")[0],
+    price: Math.round(p[1] * 100) / 100,
+  }));
+
   return NextResponse.json({
     coin,
     currentPrice,
@@ -82,5 +95,6 @@ export async function GET(request: Request) {
     sma7: sma7 !== null ? Math.round(sma7 * 100) / 100 : null,
     sma30: sma30 !== null ? Math.round(sma30 * 100) / 100 : null,
     trend: sma7 && sma30 ? (sma7 > sma30 ? "alcista" : "bajista") : null,
+    history,
   });
 }
