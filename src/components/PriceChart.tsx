@@ -12,7 +12,11 @@ export default function PriceChart({ data }: { data: PricePoint[] }) {
   useEffect(() => {
     if (!containerRef.current || data.length === 0) return;
 
-    const chart = createChart(containerRef.current, {
+    const el = containerRef.current;
+    const width = el.clientWidth || el.getBoundingClientRect().width || 800;
+    const height = el.clientHeight || el.getBoundingClientRect().height || 500;
+
+    const chart = createChart(el, {
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
         textColor: "#94a3b8",
@@ -21,8 +25,8 @@ export default function PriceChart({ data }: { data: PricePoint[] }) {
         vertLines: { color: "#1e293b" },
         horzLines: { color: "#1e293b" },
       },
-      width: containerRef.current.clientWidth,
-      height: containerRef.current.clientHeight,
+      width,
+      height,
       timeScale: { borderColor: "#1e293b" },
       rightPriceScale: { borderColor: "#1e293b" },
     });
