@@ -246,9 +246,17 @@ export default function Dashboard() {
               Análisis técnico de cripto en tiempo real, en español
             </p>
           </div>
-          <button className="bg-blue-600 hover:bg-blue-500 transition text-sm font-medium px-4 py-2 rounded-lg">
-            Próximamente: Plan Pro
-          </button>
+          <div className="flex items-center gap-3">
+            <a
+              href="/graficos"
+              className="bg-slate-800 hover:bg-slate-700 transition text-sm font-medium px-4 py-2 rounded-lg"
+            >
+              📈 Ver gráficos (cripto, acciones, índices)
+            </a>
+            <button className="bg-blue-600 hover:bg-blue-500 transition text-sm font-medium px-4 py-2 rounded-lg">
+              Próximamente: Plan Pro
+            </button>
+          </div>
         </div>
       </header>
 
