@@ -62,7 +62,7 @@ export async function GET(request: Request) {
 
   // Trae 30 días de precios históricos (gratis, sin API key)
   const res = await fetch(
-    `https://api.coingecko.com/api/v3/coins/${coingeckoId}/market_chart?vs_currency=usd&days=30&interval=daily`,
+    `https://api.coingecko.com/api/v3/coins/${coingeckoId}/market_chart?vs_currency=usd&days=90&interval=daily`,
     { next: { revalidate: 3600 } } // se actualiza cada hora
   );
 
