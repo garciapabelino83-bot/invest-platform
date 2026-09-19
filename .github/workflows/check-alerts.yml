@@ -1,0 +1,17 @@
+name: Revisar avisos de precio InvestPanel
+
+# Este robot llama a tu sitio cada 10 minutos para revisar si algún precio
+# llegó a una línea de soporte/resistencia marcada por un usuario del Plan
+# Pro, y si es así, le manda la notificación push.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  revisar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Llamar al endpoint de revisión de avisos
+        run: curl -sf -X GET "https://invest-platform-chi.vercel.app/api/check-alerts"
