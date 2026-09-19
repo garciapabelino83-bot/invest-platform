@@ -3,19 +3,10 @@ import { NextResponse } from "next/server";
 // Usamos los datos públicos de mercado de Binance (no hace falta cuenta ni
 // llave): traen precio Y volumen, y soportan temporalidades desde segundos
 // hasta meses, algo que la fuente anterior (CoinGecko) no podía dar todo
-// junto de forma gratuita.
-const BINANCE_SYMBOLS: Record<string, string> = {
-  bitcoin: "BTCUSDT",
-  ethereum: "ETHUSDT",
-  solana: "SOLUSDT",
-  cardano: "ADAUSDT",
-  ripple: "XRPUSDT",
-  dogecoin: "DOGEUSDT",
-  polkadot: "DOTUSDT",
-  avalanche: "AVAXUSDT",
-  chainlink: "LINKUSDT",
-  litecoin: "LTCUSDT",
-};
+// junto de forma gratuita. El parámetro "coin" ahora es directamente el
+// símbolo de Binance (BTC, ETH, PEPE, etc.) — ver /api/coins, que trae la
+// lista completa de monedas disponibles.
+const SIMBOLO_VALIDO = /^[A-Z0-9]{1,20}$/;
 
 // Temporalidades que Binance entiende directamente.
 const BINANCE_INTERVALS = new Set([
@@ -95,9 +86,9 @@ function aggregateYearly(candles: Candle[]): Candle[] {
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const coin = searchParams.get("coin") || "bitcoin";
+  const coin = (searchParams.get("coin") || "BTC").toUpperCase();
   const tf = searchParams.get("tf") || "1d";
-  const symbol = BINANCE_SYMBOLS[coin] || "BTCUSDT";
+  const symbol = `${SIMBOLO_VALIDO.test(coin) ? coin : "BTC"}USDT`;
 
   try {
     if (tf === "1A") {
