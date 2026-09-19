@@ -41,6 +41,7 @@ const ALL_COINS: { id: string; label: string }[] = [
 
 const DEFAULT_WATCHLIST = ["bitcoin", "ethereum", "solana"];
 const STORAGE_KEY = "invest-watchlist";
+const PRO_EMAIL_KEY = "invest-pro-email";
 
 function SignalBadge({ signal }: { signal: string | null }) {
   if (!signal) return null;
@@ -188,6 +189,15 @@ export default function Dashboard() {
   const [error, setError] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
 
+  // --- Plan Pro ---
+  const [proEmail, setProEmail] = useState<string | null>(null);
+  const [isPro, setIsPro] = useState(false);
+  const [showSubscribeForm, setShowSubscribeForm] = useState(false);
+  const [subscribeEmail, setSubscribeEmail] = useState("");
+  const [subscribing, setSubscribing] = useState(false);
+  const [subscribeError, setSubscribeError] = useState<string | null>(null);
+  const [checkoutMessage, setCheckoutMessage] = useState<string | null>(null);
+
   // Cargar la lista guardada del usuario (si existe)
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -204,6 +214,70 @@ export default function Dashboard() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(watchlist));
   }, [watchlist]);
+
+  // Al cargar la página: revisar si venimos de un pago en Stripe,
+  // o si ya teníamos guardado el correo de un suscriptor Pro.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const checkout = params.get("checkout");
+    const emailFromRedirect = params.get("email");
+
+    let email = localStorage.getItem(PRO_EMAIL_KEY);
+
+    if (checkout === "exito" && emailFromRedirect) {
+      email = emailFromRedirect;
+      localStorage.setItem(PRO_EMAIL_KEY, email);
+      setCheckoutMessage(
+        "¡Listo! Tu prueba gratis de 7 días del Plan Pro ya inició. Puede tardar unos segundos en activarse."
+      );
+    } else if (checkout === "cancelado") {
+      setCheckoutMessage("Cancelaste el pago. Puedes intentarlo de nuevo cuando quieras.");
+    }
+
+    // Limpiar la URL para que no quede el parámetro al recargar
+    if (checkout) {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+
+    if (email) {
+      setProEmail(email);
+    }
+  }, []);
+
+  // Revisar en el servidor si el correo guardado ya tiene el Plan Pro activo
+  useEffect(() => {
+    if (!proEmail) return;
+    fetch(`/api/subscription-status?email=${encodeURIComponent(proEmail)}`)
+      .then((res) => res.json())
+      .then((data) => setIsPro(!!data.isPro))
+      .catch(() => {});
+  }, [proEmail]);
+
+  const startSubscription = async () => {
+    if (!subscribeEmail || !subscribeEmail.includes("@")) {
+      setSubscribeError("Escribe un correo válido");
+      return;
+    }
+    setSubscribing(true);
+    setSubscribeError(null);
+    try {
+      const res = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: subscribeEmail }),
+      });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        setSubscribeError("No se pudo iniciar el pago. Intenta de nuevo.");
+      }
+    } catch {
+      setSubscribeError("No se pudo iniciar el pago. Intenta de nuevo.");
+    } finally {
+      setSubscribing(false);
+    }
+  };
 
   useEffect(() => {
     if (watchlist.length === 0) {
@@ -253,9 +327,18 @@ export default function Dashboard() {
             >
               📈 Ver gráficos (cripto, acciones, índices)
             </a>
-            <button className="bg-blue-600 hover:bg-blue-500 transition text-sm font-medium px-4 py-2 rounded-lg">
-              Próximamente: Plan Pro
-            </button>
+            {isPro ? (
+              <span className="bg-blue-600/20 text-blue-400 border border-blue-600/40 text-sm font-medium px-4 py-2 rounded-lg">
+                ✓ Plan Pro activo
+              </span>
+            ) : (
+              <button
+                onClick={() => setShowSubscribeForm(true)}
+                className="bg-blue-600 hover:bg-blue-500 transition text-sm font-medium px-4 py-2 rounded-lg"
+              >
+                Plan Pro — $9.99/mes
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -319,19 +402,66 @@ export default function Dashboard() {
           </p>
         )}
 
+        {checkoutMessage && (
+          <div className="mb-6 bg-blue-950/40 border border-blue-900/40 text-blue-300 text-sm rounded-xl px-4 py-3">
+            {checkoutMessage}
+          </div>
+        )}
+
         <div className="mt-14 bg-gradient-to-br from-blue-950/40 to-slate-900 border border-blue-900/40 rounded-2xl p-8">
-          <p className="text-blue-400 text-sm font-medium mb-2">🔒 Plan Pro (próximamente)</p>
-          <h2 className="text-2xl font-bold mb-3">
-            Alertas automáticas y seguimiento de tu cartera
-          </h2>
-          <p className="text-slate-400 max-w-2xl mb-5">
-            Recibe un aviso cuando una moneda entre en zona de sobrecompra o sobreventa,
-            registra tu propia cartera y compara tu rendimiento en el tiempo — todo en
-            español, pensado para gente que empieza en cripto.
-          </p>
-          <button className="bg-blue-600 hover:bg-blue-500 transition text-sm font-medium px-5 py-2.5 rounded-lg">
-            Unirme a la lista de espera
-          </button>
+          {isPro ? (
+            <>
+              <p className="text-blue-400 text-sm font-medium mb-2">🔓 Plan Pro</p>
+              <h2 className="text-2xl font-bold mb-3">¡Ya tienes acceso al Plan Pro!</h2>
+              <p className="text-slate-400 max-w-2xl">
+                Gracias por suscribirte. Estamos construyendo las alertas automáticas y el
+                seguimiento de cartera — pronto se activan solas en tu cuenta, sin que tengas
+                que hacer nada.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-blue-400 text-sm font-medium mb-2">🔒 Plan Pro — $9.99/mes</p>
+              <h2 className="text-2xl font-bold mb-3">
+                Alertas automáticas y seguimiento de tu cartera
+              </h2>
+              <p className="text-slate-400 max-w-2xl mb-5">
+                Recibe un aviso cuando una moneda entre en zona de sobrecompra o sobreventa,
+                registra tu propia cartera y compara tu rendimiento en el tiempo — todo en
+                español, pensado para gente que empieza en cripto. Incluye 7 días de prueba
+                gratis.
+              </p>
+
+              {showSubscribeForm ? (
+                <div className="flex flex-col sm:flex-row gap-3 max-w-md">
+                  <input
+                    type="email"
+                    placeholder="tu@correo.com"
+                    value={subscribeEmail}
+                    onChange={(e) => setSubscribeEmail(e.target.value)}
+                    className="bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-sm flex-1 focus:outline-none focus:border-blue-500"
+                  />
+                  <button
+                    onClick={startSubscription}
+                    disabled={subscribing}
+                    className="bg-blue-600 hover:bg-blue-500 transition text-sm font-medium px-5 py-2.5 rounded-lg disabled:opacity-50"
+                  >
+                    {subscribing ? "Un momento..." : "Empezar prueba gratis"}
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowSubscribeForm(true)}
+                  className="bg-blue-600 hover:bg-blue-500 transition text-sm font-medium px-5 py-2.5 rounded-lg"
+                >
+                  Empezar prueba gratis de 7 días
+                </button>
+              )}
+              {subscribeError && (
+                <p className="text-red-400 text-xs mt-3">{subscribeError}</p>
+              )}
+            </>
+          )}
         </div>
 
         <p className="text-slate-600 text-xs mt-8 text-center">
