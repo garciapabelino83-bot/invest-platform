@@ -105,6 +105,16 @@ export default function Graficos() {
 
         <p className="text-slate-600 text-xs mt-4 text-center">
           Datos de mercado en tiempo real. Esto no es asesoría financiera.
+          {" "}Gráficos con tecnología de{" "}
+          <a
+            href="https://www.tradingview.com/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-slate-400"
+          >
+            Lightweight Charts (TradingView)
+          </a>
+          .
         </p>
       </div>
     </main>
