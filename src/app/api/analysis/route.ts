@@ -87,10 +87,15 @@ export async function GET(request: Request) {
   const sma30 = calculateSMA(prices, 30);
   const currentPrice = prices[prices.length - 1];
 
-  // Historial diario para graficar (fecha + precio)
+  // Historial diario para graficar (fecha + precio). Antes esto redondeaba
+  // a 2 decimales fijos (Math.round(p*100)/100), lo cual está bien para
+  // Bitcoin pero convierte en "0" el precio de cualquier memecoin que
+  // valga fracciones de centavo (ej. PEPE a $0.0000123). Mandamos el
+  // precio completo sin redondear y dejamos que la interfaz decida cuántos
+  // decimales mostrar según la magnitud de cada moneda.
   const history = data.prices.map((p: [number, number]) => ({
     date: new Date(p[0]).toISOString().split("T")[0],
-    price: Math.round(p[1] * 100) / 100,
+    price: p[1],
   }));
 
   return NextResponse.json({
@@ -98,8 +103,8 @@ export async function GET(request: Request) {
     currentPrice,
     rsi: rsi !== null ? Math.round(rsi * 100) / 100 : null,
     rsiSignal: rsi !== null ? interpretRSI(rsi) : null,
-    sma7: sma7 !== null ? Math.round(sma7 * 100) / 100 : null,
-    sma30: sma30 !== null ? Math.round(sma30 * 100) / 100 : null,
+    sma7,
+    sma30,
     trend: sma7 && sma30 ? (sma7 > sma30 ? "alcista" : "bajista") : null,
     history,
   });
