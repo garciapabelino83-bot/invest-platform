@@ -2,23 +2,16 @@ import { NextResponse } from "next/server";
 import { sql, ensurePriceAlertsTable, ensureCoinPriceStateTable } from "@/lib/db";
 import { getWebPush } from "@/lib/push";
 
-const COINGECKO_IDS: Record<string, string> = {
-  bitcoin: "bitcoin",
-  ethereum: "ethereum",
-  solana: "solana",
-  cardano: "cardano",
-  ripple: "ripple",
-  dogecoin: "dogecoin",
-  polkadot: "polkadot",
-  avalanche: "avalanche-2",
-  chainlink: "chainlink",
-  litecoin: "litecoin",
-};
-
 // Este endpoint lo llama un robot externo (GitHub Actions) cada varios
 // minutos. Revisa si el precio de algún activo "cruzó" una línea de
 // soporte/resistencia marcada por un usuario del Plan Pro, y si es así le
 // manda una notificación push.
+//
+// Los precios se piden directo a Binance (mismo origen que usa /graficos
+// para las velas), usando el símbolo tal cual está guardado en la alerta
+// (BTC, ETH, PEPE, etc. + "USDT"). Así funciona automáticamente con
+// cualquier moneda nueva que se agregue a la lista de /api/coins, sin
+// tener que mantener una tabla de conversión aparte.
 async function checkAlerts() {
   await ensurePriceAlertsTable();
   await ensureCoinPriceStateTable();
@@ -32,9 +25,11 @@ async function checkAlerts() {
     return { checked: 0, notified: 0 };
   }
 
-  const geckoIds = coins.map((c) => COINGECKO_IDS[c] || c).join(",");
+  const symbols = coins.map((c) => `${c.toUpperCase()}USDT`);
   const res = await fetch(
-    `https://api.coingecko.com/api/v3/simple/price?ids=${geckoIds}&vs_currencies=usd`,
+    `https://data-api.binance.vision/api/v3/ticker/price?symbols=${encodeURIComponent(
+      JSON.stringify(symbols)
+    )}`,
     { cache: "no-store" }
   );
 
@@ -42,15 +37,17 @@ async function checkAlerts() {
     throw new Error("No se pudieron obtener los precios actuales");
   }
 
-  const prices: Record<string, { usd: number }> = await res.json();
+  const rows: { symbol: string; price: string }[] = await res.json();
+  const prices: Record<string, number> = {};
+  for (const r of rows) prices[r.symbol] = Number(r.price);
+
   const webpush = getWebPush();
 
   let notified = 0;
 
   for (const coin of coins) {
-    const geckoId = COINGECKO_IDS[coin] || coin;
-    const current = prices[geckoId]?.usd;
-    if (typeof current !== "number") continue;
+    const current = prices[`${coin.toUpperCase()}USDT`];
+    if (typeof current !== "number" || Number.isNaN(current)) continue;
 
     const stateRows = await sql`
       SELECT last_price FROM coin_price_state WHERE coin = ${coin}
