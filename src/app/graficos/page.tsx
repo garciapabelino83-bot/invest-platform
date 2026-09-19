@@ -171,9 +171,14 @@ export default function Graficos() {
             <h1 className="text-xl font-bold">📊 InvestPanel</h1>
             <p className="text-slate-400 text-sm">Gráficos de velas en tiempo real</p>
           </div>
-          <Link href="/" className="text-sm text-slate-400 hover:text-white transition">
-            ← Volver al panel
-          </Link>
+          <div className="flex items-center gap-4 shrink-0">
+            <Link href="/ayuda" className="text-sm text-slate-400 hover:text-white transition">
+              📚 Guía rápida
+            </Link>
+            <Link href="/" className="text-sm text-slate-400 hover:text-white transition">
+              ← Volver al panel
+            </Link>
+          </div>
         </div>
       </header>
 
