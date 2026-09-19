@@ -46,9 +46,12 @@ type Candle = {
   volume: number;
 };
 
+// Usamos el dominio "data-api.binance.vision": es la misma información de
+// mercado pública de Binance, pero sin el bloqueo geográfico que tiene
+// api.binance.com para servidores en Estados Unidos (donde corre Vercel).
 async function fetchKlines(symbol: string, interval: string, limit: number): Promise<Candle[]> {
   const res = await fetch(
-    `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
+    `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
     { next: { revalidate: interval === "1s" ? 5 : 30 } }
   );
 
