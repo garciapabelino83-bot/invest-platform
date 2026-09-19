@@ -24,7 +24,34 @@ type Analysis = {
   sma30: number | null;
   trend: string | null;
   history: { date: string; price: number }[];
+  error?: boolean;
 };
+
+// Trae los análisis de a poco (en tandas de a 4) en vez de todos a la vez.
+// Con la lista de monedas ampliada a 48, si alguien agrega muchas a "Mi
+// lista" y todas piden su análisis técnico al mismo tiempo, podemos topar
+// con el límite de peticiones gratuito de la API de CoinGecko y varias
+// tarjetas se quedan cargando para siempre. Pedirlas de a poco evita eso.
+async function fetchAnalysesEnTandas(
+  coins: string[],
+  onResultado: (coin: string, data: Analysis) => void,
+  tandaSize = 4
+) {
+  for (let i = 0; i < coins.length; i += tandaSize) {
+    const tanda = coins.slice(i, i + tandaSize);
+    await Promise.all(
+      tanda.map((coin) =>
+        fetch(`/api/analysis?coin=${coin}`)
+          .then((res) => {
+            if (!res.ok) throw new Error("fallo");
+            return res.json();
+          })
+          .then((data) => onResultado(coin, data))
+          .catch(() => onResultado(coin, { error: true } as Analysis))
+      )
+    );
+  }
+}
 
 // Lista de monedas disponibles para "Mi lista" (dashboard con precio +
 // análisis técnico vía CoinGecko). Incluye las principales, varios
@@ -145,12 +172,14 @@ function CoinCard({
   priceData,
   analysis,
   onRemove,
+  onRetryAnalysis,
 }: {
   coinId: string;
   label: string;
   priceData?: { usd: number; usd_24h_change: number };
   analysis?: Analysis;
   onRemove: () => void;
+  onRetryAnalysis: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   if (!priceData) return null;
@@ -175,7 +204,17 @@ function CoinCard({
         </button>
       </div>
 
-      {analysis ? (
+      {analysis?.error ? (
+        <div className="border-t border-slate-800 pt-4 flex items-center justify-between">
+          <p className="text-slate-500 text-xs">No se pudo cargar el análisis.</p>
+          <button
+            onClick={onRetryAnalysis}
+            className="text-blue-400 text-xs hover:underline shrink-0 ml-2"
+          >
+            Reintentar
+          </button>
+        </div>
+      ) : analysis ? (
         <>
           <div className="border-t border-slate-800 pt-4 flex flex-col gap-3">
             <div className="flex items-center justify-between">
@@ -348,16 +387,17 @@ export default function Dashboard() {
       setPrices({});
       return;
     }
+    setError(false);
     fetch(`/api/prices?coins=${watchlist.join(",")}`)
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error("fallo");
+        return res.json();
+      })
       .then((data) => setPrices(data))
       .catch(() => setError(true));
 
-    watchlist.forEach((coin) => {
-      fetch(`/api/analysis?coin=${coin}`)
-        .then((res) => res.json())
-        .then((data) => setAnalyses((prev) => ({ ...prev, [coin]: data })))
-        .catch(() => {});
+    fetchAnalysesEnTandas(watchlist, (coin, data) => {
+      setAnalyses((prev) => ({ ...prev, [coin]: data }));
     });
   }, [watchlist]);
 
@@ -390,6 +430,12 @@ export default function Dashboard() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            <a
+              href="/ayuda"
+              className="text-slate-400 hover:text-white transition text-sm font-medium px-2 py-2"
+            >
+              📚 Guía rápida
+            </a>
             <a
               href="/graficos"
               className="bg-slate-800 hover:bg-slate-700 transition text-sm font-medium px-4 py-2 rounded-lg"
@@ -473,6 +519,11 @@ export default function Dashboard() {
                   priceData={prices[coinId]}
                   analysis={analyses[coinId]}
                   onRemove={() => removeCoin(coinId)}
+                  onRetryAnalysis={() =>
+                    fetchAnalysesEnTandas([coinId], (coin, data) => {
+                      setAnalyses((prev) => ({ ...prev, [coin]: data }));
+                    })
+                  }
                 />
               );
             })}
