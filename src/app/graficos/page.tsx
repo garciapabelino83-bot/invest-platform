@@ -18,12 +18,27 @@ const COINS = [
 ];
 
 const TIMEFRAMES = [
-  { id: "1h", label: "1 Hora" },
-  { id: "4h", label: "4 Horas" },
-  { id: "1d", label: "1 Día" },
+  { id: "1s", label: "1 seg" },
+  { id: "1m", label: "1 min" },
+  { id: "5m", label: "5 min" },
+  { id: "15m", label: "15 min" },
+  { id: "30m", label: "30 min" },
+  { id: "1h", label: "1 hora" },
+  { id: "4h", label: "4 horas" },
+  { id: "1d", label: "1 día" },
+  { id: "1w", label: "1 semana" },
+  { id: "1M", label: "1 mes" },
+  { id: "1A", label: "1 año" },
 ];
 
-type Candle = { time: number; open: number; high: number; low: number; close: number };
+type Candle = {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+};
 
 const PRO_EMAIL_KEY = "invest-pro-email";
 
