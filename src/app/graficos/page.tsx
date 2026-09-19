@@ -25,11 +25,30 @@ const TIMEFRAMES = [
 
 type Candle = { time: number; open: number; high: number; low: number; close: number };
 
+const PRO_EMAIL_KEY = "invest-pro-email";
+
 export default function Graficos() {
   const [coin, setCoin] = useState("bitcoin");
   const [timeframe, setTimeframe] = useState("1d");
   const [candles, setCandles] = useState<Candle[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // --- Plan Pro (para saber si puede activar avisos de precio) ---
+  const [proEmail, setProEmail] = useState<string | null>(null);
+  const [isPro, setIsPro] = useState(false);
+
+  useEffect(() => {
+    const email = localStorage.getItem(PRO_EMAIL_KEY);
+    if (email) setProEmail(email);
+  }, []);
+
+  useEffect(() => {
+    if (!proEmail) return;
+    fetch(`/api/subscription-status?email=${encodeURIComponent(proEmail)}`)
+      .then((res) => res.json())
+      .then((data) => setIsPro(!!data.isPro))
+      .catch(() => {});
+  }, [proEmail]);
 
   useEffect(() => {
     setLoading(true);
@@ -93,13 +112,24 @@ export default function Graficos() {
           {COINS.find((c) => c.id === coin)?.label}
         </h2>
 
+        {!isPro && (
+          <p className="text-xs text-slate-500 mb-3">
+            🔔 Recibir un aviso cuando el precio llegue a una línea que marques es una función
+            del{" "}
+            <Link href="/" className="text-blue-400 hover:underline">
+              Plan Pro
+            </Link>
+            .
+          </p>
+        )}
+
         <div className="bg-slate-900 rounded-2xl border border-slate-800 h-[600px] p-4">
           {loading ? (
             <div className="h-full flex items-center justify-center text-slate-500">
               Cargando velas...
             </div>
           ) : (
-            <CandleChart candles={candles} />
+            <CandleChart candles={candles} coin={coin} isPro={isPro} proEmail={proEmail} />
           )}
         </div>
 
