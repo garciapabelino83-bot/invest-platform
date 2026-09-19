@@ -17,6 +17,13 @@ export async function GET() {
 
     const raw: { symbol: string; quoteVolume: string }[] = await res.json();
 
+    // Monedas "estables" (siempre valen ~$1): las dejamos fuera de la
+    // lista porque no sirven para análisis técnico (su gráfico es una
+    // línea plana), aunque tengan mucho volumen de operaciones.
+    const ESTABLES = new Set([
+      "USDC", "USD1", "FDUSD", "DAI", "TUSD", "BUSD", "USDP", "PYUSD", "EUR", "USDE",
+    ]);
+
     const vistos = new Set<string>();
     const monedas: { symbol: string; volumen: number }[] = [];
 
@@ -27,7 +34,7 @@ export async function GET() {
       if (/(UP|DOWN|BULL|BEAR)USDT$/.test(t.symbol)) continue;
 
       const base = t.symbol.slice(0, -4); // quita "USDT" del final
-      if (!base || vistos.has(base)) continue;
+      if (!base || vistos.has(base) || ESTABLES.has(base)) continue;
       vistos.add(base);
 
       monedas.push({ symbol: base, volumen: Number(t.quoteVolume) || 0 });
