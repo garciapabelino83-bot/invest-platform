@@ -1,69 +1,89 @@
 import { NextResponse } from "next/server";
 
-const COINGECKO_IDS: Record<string, string> = {
-  bitcoin: "bitcoin",
-  ethereum: "ethereum",
-  solana: "solana",
-  cardano: "cardano",
-  ripple: "ripple",
-  dogecoin: "dogecoin",
-  polkadot: "polkadot",
-  avalanche: "avalanche-2",
-  chainlink: "chainlink",
-  litecoin: "litecoin",
+// Usamos los datos públicos de mercado de Binance (no hace falta cuenta ni
+// llave): traen precio Y volumen, y soportan temporalidades desde segundos
+// hasta meses, algo que la fuente anterior (CoinGecko) no podía dar todo
+// junto de forma gratuita.
+const BINANCE_SYMBOLS: Record<string, string> = {
+  bitcoin: "BTCUSDT",
+  ethereum: "ETHUSDT",
+  solana: "SOLUSDT",
+  cardano: "ADAUSDT",
+  ripple: "XRPUSDT",
+  dogecoin: "DOGEUSDT",
+  polkadot: "DOTUSDT",
+  avalanche: "AVAXUSDT",
+  chainlink: "LINKUSDT",
+  litecoin: "LTCUSDT",
 };
 
-// Mapea el timeframe elegido al parámetro "days" que espera CoinGecko.
-// CoinGecko ajusta la granularidad automáticamente:
-// days=1 -> velas de 30 min | days=7 -> velas de 4 horas | days=30 -> velas de 4 horas
-//
-// OJO: si se pide days=90 (o más), CoinGecko cambia a velas de 4 EN 4 DÍAS y su
-// última vela puede quedar "abierta" varios días, mostrando un precio de cierre
-// desactualizado (por eso el gráfico de "1 Día" mostraba un precio viejo). Para
-// evitar eso, para "1d" pedimos días=30 (velas de 4 horas, siempre al día) y las
-// agrupamos nosotros mismos en velas diarias.
-const TIMEFRAME_DAYS: Record<string, number> = {
-  "1h": 1,
-  "4h": 7,
-  "1d": 30,
+// Temporalidades que Binance entiende directamente.
+const BINANCE_INTERVALS = new Set([
+  "1s",
+  "1m",
+  "3m",
+  "5m",
+  "15m",
+  "30m",
+  "1h",
+  "2h",
+  "4h",
+  "6h",
+  "8h",
+  "12h",
+  "1d",
+  "3d",
+  "1w",
+  "1M",
+]);
+
+type Candle = {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
 };
 
-type Candle = { time: number; open: number; high: number; low: number; close: number };
-
-async function fetchOhlc(coingeckoId: string, days: number): Promise<Candle[] | null> {
+async function fetchKlines(symbol: string, interval: string, limit: number): Promise<Candle[]> {
   const res = await fetch(
-    `https://api.coingecko.com/api/v3/coins/${coingeckoId}/ohlc?vs_currency=usd&days=${days}`,
-    { next: { revalidate: 1800 } }
+    `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
+    { next: { revalidate: interval === "1s" ? 5 : 30 } }
   );
 
-  if (!res.ok) return null;
+  if (!res.ok) {
+    throw new Error("No se pudieron obtener las velas");
+  }
 
-  const raw: [number, number, number, number, number][] = await res.json();
+  const raw: (string | number)[][] = await res.json();
 
-  return raw.map(([time, open, high, low, close]) => ({
-    time: Math.floor(time / 1000),
-    open,
-    high,
-    low,
-    close,
+  return raw.map((k) => ({
+    time: Math.floor(Number(k[0]) / 1000),
+    open: Number(k[1]),
+    high: Number(k[2]),
+    low: Number(k[3]),
+    close: Number(k[4]),
+    volume: Number(k[5]),
   }));
 }
 
-// Junta velas de 4 horas en velas de 1 día (00:00 UTC a 00:00 UTC), para que el
-// día de hoy siempre aparezca con el precio más reciente en vez de quedar vacío.
-function aggregateToDaily(candles: Candle[]): Candle[] {
-  const DAY = 86400;
+// "1A" (temporalidad de años) no existe en Binance: pedimos velas
+// mensuales y las agrupamos nosotros mismos de 12 en 12 meses.
+function aggregateYearly(candles: Candle[]): Candle[] {
   const buckets = new Map<number, Candle>();
 
   for (const c of candles) {
-    const dayStart = Math.floor(c.time / DAY) * DAY;
-    const existing = buckets.get(dayStart);
+    const year = new Date(c.time * 1000).getUTCFullYear();
+    const key = Date.UTC(year, 0, 1) / 1000;
+    const existing = buckets.get(key);
     if (!existing) {
-      buckets.set(dayStart, { time: dayStart, open: c.open, high: c.high, low: c.low, close: c.close });
+      buckets.set(key, { ...c, time: key });
     } else {
       existing.high = Math.max(existing.high, c.high);
       existing.low = Math.min(existing.low, c.low);
       existing.close = c.close;
+      existing.volume += c.volume;
     }
   }
 
@@ -73,17 +93,21 @@ function aggregateToDaily(candles: Candle[]): Candle[] {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const coin = searchParams.get("coin") || "bitcoin";
-  const timeframe = searchParams.get("tf") || "1d";
-  const coingeckoId = COINGECKO_IDS[coin] || "bitcoin";
-  const days = TIMEFRAME_DAYS[timeframe] || 30;
+  const tf = searchParams.get("tf") || "1d";
+  const symbol = BINANCE_SYMBOLS[coin] || "BTCUSDT";
 
-  const raw = await fetchOhlc(coingeckoId, days);
+  try {
+    if (tf === "1A") {
+      const raw = await fetchKlines(symbol, "1M", 1000);
+      return NextResponse.json({ candles: aggregateYearly(raw) });
+    }
 
-  if (!raw) {
+    const interval = BINANCE_INTERVALS.has(tf) ? tf : "1d";
+    const limit = interval === "1s" ? 1000 : 500;
+    const candles = await fetchKlines(symbol, interval, limit);
+    return NextResponse.json({ candles });
+  } catch (err) {
+    console.error("Error obteniendo velas:", err);
     return NextResponse.json({ error: "No se pudieron obtener las velas" }, { status: 500 });
   }
-
-  const candles = timeframe === "1d" ? aggregateToDaily(raw) : raw;
-
-  return NextResponse.json({ candles });
 }
