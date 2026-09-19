@@ -88,6 +88,22 @@ const DEFAULT_WATCHLIST = ["bitcoin", "ethereum", "solana"];
 const STORAGE_KEY = "invest-watchlist";
 const PRO_EMAIL_KEY = "invest-pro-email";
 
+// Formatea un precio en dólares mostrando siempre cifras significativas.
+// Con solo 2 decimales fijos, cualquier memecoin que valga fracciones de
+// centavo (ej. PEPE a $0.0000123) se veía como "$0". Para precios >= $1
+// usamos 2 decimales de toda la vida; para precios menores, agregamos
+// tantos decimales como haga falta para mostrar 4 cifras significativas.
+function formatPrice(n: number | null | undefined): string {
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  if (n === 0) return "0";
+  if (Math.abs(n) >= 1) {
+    return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  const leadingZeros = Math.max(0, -Math.floor(Math.log10(Math.abs(n))) - 1);
+  const decimals = Math.min(12, leadingZeros + 4);
+  return n.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
 function SignalBadge({ signal }: { signal: string | null }) {
   if (!signal) return null;
   const styles: Record<string, string> = {
@@ -145,7 +161,7 @@ function CoinCard({
       <div className="flex items-start justify-between">
         <div>
           <p className="text-slate-400 text-sm">{label}</p>
-          <p className="text-3xl font-bold mt-1">${priceData.usd.toLocaleString()}</p>
+          <p className="text-3xl font-bold mt-1">${formatPrice(priceData.usd)}</p>
           <p className={isUp ? "text-green-400 text-sm mt-1" : "text-red-400 text-sm mt-1"}>
             {isUp ? "▲" : "▼"} {priceData.usd_24h_change.toFixed(2)}% (24h)
           </p>
@@ -170,7 +186,7 @@ function CoinCard({
             <div className="flex items-center justify-between mt-1">
               <span className="text-slate-400 text-xs">Media 7d / 30d</span>
               <span className="font-mono text-sm">
-                ${analysis.sma7?.toLocaleString()} / ${analysis.sma30?.toLocaleString()}
+                ${formatPrice(analysis.sma7)} / ${formatPrice(analysis.sma30)}
               </span>
             </div>
             <TrendBadge trend={analysis.trend} />
@@ -196,8 +212,9 @@ function CoinCard({
                   />
                   <YAxis
                     tick={{ fontSize: 10, fill: "#64748b" }}
+                    tickFormatter={(v: number) => `$${formatPrice(v)}`}
                     domain={["auto", "auto"]}
-                    width={55}
+                    width={70}
                   />
                   <Tooltip
                     contentStyle={{
@@ -207,6 +224,7 @@ function CoinCard({
                       fontSize: 12,
                     }}
                     labelStyle={{ color: "#94a3b8" }}
+                    formatter={(value) => [`$${formatPrice(Number(value))}`, "Precio"]}
                   />
                   <Line
                     type="monotone"
