@@ -26,6 +26,12 @@ type Analysis = {
   history: { date: string; price: number }[];
 };
 
+// Lista de monedas disponibles para "Mi lista" (dashboard con precio +
+// análisis técnico vía CoinGecko). Incluye las principales, varios
+// altcoins de capitalización media y las memecoins más conocidas — el
+// mismo criterio que ya usamos en /graficos, pero aquí necesitamos el id
+// exacto de CoinGecko (no el símbolo de Binance) porque /api/prices y
+// /api/analysis consultan la API de CoinGecko.
 const ALL_COINS: { id: string; label: string }[] = [
   { id: "bitcoin", label: "Bitcoin (BTC)" },
   { id: "ethereum", label: "Ethereum (ETH)" },
@@ -37,6 +43,45 @@ const ALL_COINS: { id: string; label: string }[] = [
   { id: "avalanche-2", label: "Avalanche (AVAX)" },
   { id: "chainlink", label: "Chainlink (LINK)" },
   { id: "litecoin", label: "Litecoin (LTC)" },
+  { id: "binancecoin", label: "BNB" },
+  { id: "tron", label: "TRON (TRX)" },
+  { id: "the-open-network", label: "Toncoin (TON)" },
+  { id: "matic-network", label: "Polygon (POL)" },
+  { id: "cosmos", label: "Cosmos (ATOM)" },
+  { id: "near", label: "NEAR Protocol (NEAR)" },
+  { id: "arbitrum", label: "Arbitrum (ARB)" },
+  { id: "optimism", label: "Optimism (OP)" },
+  { id: "sui", label: "Sui (SUI)" },
+  { id: "aptos", label: "Aptos (APT)" },
+  { id: "injective-protocol", label: "Injective (INJ)" },
+  { id: "uniswap", label: "Uniswap (UNI)" },
+  { id: "aave", label: "Aave (AAVE)" },
+  { id: "the-sandbox", label: "The Sandbox (SAND)" },
+  { id: "decentraland", label: "Decentraland (MANA)" },
+  { id: "fantom", label: "Fantom (FTM)" },
+  { id: "algorand", label: "Algorand (ALGO)" },
+  { id: "vechain", label: "VeChain (VET)" },
+  { id: "internet-computer", label: "Internet Computer (ICP)" },
+  { id: "filecoin", label: "Filecoin (FIL)" },
+  { id: "hedera-hashgraph", label: "Hedera (HBAR)" },
+  { id: "stellar", label: "Stellar (XLM)" },
+  { id: "ethereum-classic", label: "Ethereum Classic (ETC)" },
+  { id: "bitcoin-cash", label: "Bitcoin Cash (BCH)" },
+  { id: "eos", label: "EOS" },
+  { id: "the-graph", label: "The Graph (GRT)" },
+  { id: "lido-dao", label: "Lido DAO (LDO)" },
+  { id: "thorchain", label: "THORChain (RUNE)" },
+  { id: "celestia", label: "Celestia (TIA)" },
+  { id: "sei-network", label: "Sei (SEI)" },
+  { id: "worldcoin-wld", label: "Worldcoin (WLD)" },
+  // --- Memecoins ---
+  { id: "shiba-inu", label: "Shiba Inu (SHIB)" },
+  { id: "pepe", label: "Pepe (PEPE)" },
+  { id: "floki", label: "Floki (FLOKI)" },
+  { id: "bonk", label: "Bonk (BONK)" },
+  { id: "dogwifcoin", label: "dogwifhat (WIF)" },
+  { id: "pudgy-penguins", label: "Pudgy Penguins (PENGU)" },
+  { id: "ordi", label: "ORDI" },
 ];
 
 const DEFAULT_WATCHLIST = ["bitcoin", "ethereum", "solana"];
@@ -188,6 +233,7 @@ export default function Dashboard() {
   const [analyses, setAnalyses] = useState<Record<string, Analysis>>({});
   const [error, setError] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [addFilter, setAddFilter] = useState("");
 
   // --- Plan Pro ---
   const [proEmail, setProEmail] = useState<string | null>(null);
@@ -302,13 +348,18 @@ export default function Dashboard() {
       setWatchlist([...watchlist, coinId]);
     }
     setShowAdd(false);
+    setAddFilter("");
   };
 
   const removeCoin = (coinId: string) => {
     setWatchlist(watchlist.filter((c) => c !== coinId));
   };
 
-  const availableToAdd = ALL_COINS.filter((c) => !watchlist.includes(c.id));
+  const availableToAdd = ALL_COINS.filter(
+    (c) =>
+      !watchlist.includes(c.id) &&
+      c.label.toLowerCase().includes(addFilter.toLowerCase())
+  );
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
@@ -361,9 +412,22 @@ export default function Dashboard() {
               + Agregar moneda
             </button>
             {showAdd && (
-              <div className="absolute right-0 mt-2 w-56 bg-slate-900 border border-slate-800 rounded-xl shadow-lg z-10 max-h-64 overflow-y-auto">
+              <div className="absolute right-0 mt-2 w-56 bg-slate-900 border border-slate-800 rounded-xl shadow-lg z-10 max-h-72 overflow-y-auto">
+                <div className="sticky top-0 bg-slate-900 p-2 border-b border-slate-800">
+                  <input
+                    autoFocus
+                    value={addFilter}
+                    onChange={(e) => setAddFilter(e.target.value)}
+                    placeholder="Buscar moneda..."
+                    className="w-full bg-slate-800 text-sm rounded-lg px-3 py-1.5 outline-none placeholder:text-slate-500"
+                  />
+                </div>
                 {availableToAdd.length === 0 && (
-                  <p className="text-slate-500 text-xs p-3">Ya agregaste todas</p>
+                  <p className="text-slate-500 text-xs p-3">
+                    {ALL_COINS.every((c) => watchlist.includes(c.id))
+                      ? "Ya agregaste todas"
+                      : "Sin resultados"}
+                  </p>
                 )}
                 {availableToAdd.map((c) => (
                   <button
