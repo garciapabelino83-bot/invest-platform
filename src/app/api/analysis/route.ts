@@ -42,23 +42,29 @@ function interpretRSI(rsi: number): string {
   return "neutral";
 }
 
-const COINGECKO_IDS: Record<string, string> = {
-  bitcoin: "bitcoin",
-  ethereum: "ethereum",
-  solana: "solana",
-  cardano: "cardano",
-  ripple: "ripple",
-  dogecoin: "dogecoin",
-  polkadot: "polkadot",
-  avalanche: "avalanche-2",
-  chainlink: "chainlink",
-  litecoin: "litecoin",
-};
+// Ids válidos de CoinGecko — debe incluir todas las monedas que ofrecemos
+// en ALL_COINS (src/app/page.tsx). Antes este mapa usaba claves cortas
+// ("avalanche") que no coincidían con los ids reales que manda el
+// dashboard ("avalanche-2"), así que el análisis técnico de varias
+// monedas caía siempre al "|| bitcoin" y mostraba los datos de Bitcoin
+// por error. Ahora validamos el id tal cual llega.
+const COINGECKO_IDS_VALIDOS = new Set([
+  "bitcoin", "ethereum", "solana", "cardano", "ripple", "dogecoin",
+  "polkadot", "avalanche-2", "chainlink", "litecoin", "binancecoin",
+  "tron", "the-open-network", "matic-network", "cosmos", "near",
+  "arbitrum", "optimism", "sui", "aptos", "injective-protocol",
+  "uniswap", "aave", "the-sandbox", "decentraland", "fantom",
+  "algorand", "vechain", "internet-computer", "filecoin",
+  "hedera-hashgraph", "stellar", "ethereum-classic", "bitcoin-cash",
+  "eos", "the-graph", "lido-dao", "thorchain", "celestia",
+  "sei-network", "worldcoin-wld", "shiba-inu", "pepe", "floki",
+  "bonk", "dogwifcoin", "pudgy-penguins", "ordi",
+]);
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const coin = searchParams.get("coin") || "bitcoin";
-  const coingeckoId = COINGECKO_IDS[coin] || "bitcoin";
+  const coingeckoId = COINGECKO_IDS_VALIDOS.has(coin) ? coin : "bitcoin";
 
   // Trae 30 días de precios históricos (gratis, sin API key)
   const res = await fetch(
