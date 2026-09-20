@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import Link from "next/link";
 import CandleChart from "@/components/CandleChart";
 
@@ -81,17 +81,17 @@ function etiqueta(symbol: string) {
 }
 
 const TIMEFRAMES = [
-  { id: "1s", label: "1 seg" },
-  { id: "1m", label: "1 min" },
-  { id: "5m", label: "5 min" },
-  { id: "15m", label: "15 min" },
-  { id: "30m", label: "30 min" },
-  { id: "1h", label: "1 hora" },
-  { id: "4h", label: "4 horas" },
-  { id: "1d", label: "1 día" },
-  { id: "1w", label: "1 semana" },
-  { id: "1M", label: "1 mes" },
-  { id: "1A", label: "1 año" },
+  { id: "1s", label: "1s" },
+  { id: "1m", label: "1m" },
+  { id: "5m", label: "5m" },
+  { id: "15m", label: "15m" },
+  { id: "30m", label: "30m" },
+  { id: "1h", label: "1h" },
+  { id: "4h", label: "4h" },
+  { id: "1d", label: "1d" },
+  { id: "1w", label: "1s" },
+  { id: "1M", label: "1M" },
+  { id: "1A", label: "1A" },
 ];
 
 type Candle = {
@@ -103,17 +103,46 @@ type Candle = {
   volume?: number;
 };
 
+type Ticker24h = {
+  lastPrice: number;
+  changePercent: number;
+  high: number;
+  low: number;
+  volume: number;
+  quoteVolume: number;
+};
+
 const PRO_EMAIL_KEY = "invest-pro-email";
+
+// Formato de precio adaptativo: monedas caras (BTC) con 2 decimales,
+// monedas baratas (PEPE, SHIB) con más decimales para que no se vean como 0.
+function formatPrice(value: number) {
+  if (!Number.isFinite(value)) return "—";
+  if (value >= 1) {
+    return value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  if (value === 0) return "0.00";
+  const decimales = value >= 0.01 ? 4 : value >= 0.0001 ? 6 : 8;
+  return value.toLocaleString("en-US", { minimumFractionDigits: decimales, maximumFractionDigits: decimales });
+}
+
+function formatCompact(value: number) {
+  if (!Number.isFinite(value)) return "—";
+  return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 2 }).format(value);
+}
 
 export default function Graficos() {
   const [coin, setCoin] = useState("BTC");
   const [timeframe, setTimeframe] = useState("1d");
   const [candles, setCandles] = useState<Candle[]>([]);
   const [loading, setLoading] = useState(true);
+  const [ticker, setTicker] = useState<Ticker24h | null>(null);
 
   // --- Lista completa de monedas (para el buscador) ---
   const [todasLasMonedas, setTodasLasMonedas] = useState<string[]>([]);
   const [busqueda, setBusqueda] = useState("");
+  const [buscadorAbierto, setBuscadorAbierto] = useState(false);
+  const buscadorRef = useRef<HTMLDivElement>(null);
 
   // --- Plan Pro (para saber si puede activar avisos de precio) ---
   const [proEmail, setProEmail] = useState<string | null>(null);
@@ -150,6 +179,38 @@ export default function Graficos() {
       .catch(() => setLoading(false));
   }, [coin, timeframe]);
 
+  // Barra de precio estilo exchange (cambio %, máximo, mínimo, volumen de
+  // 24h). Se actualiza sola cada 10s, independiente de las velas del
+  // gráfico y de la temporalidad elegida.
+  useEffect(() => {
+    let cancelado = false;
+    const cargarTicker = () => {
+      fetch(`/api/ticker24h?coin=${coin}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (cancelado || data.error) return;
+          setTicker(data);
+        })
+        .catch(() => {});
+    };
+    cargarTicker();
+    const intervalo = setInterval(cargarTicker, 10000);
+    return () => {
+      cancelado = true;
+      clearInterval(intervalo);
+    };
+  }, [coin]);
+
+  useEffect(() => {
+    const cerrarSiClicFuera = (e: MouseEvent) => {
+      if (buscadorRef.current && !buscadorRef.current.contains(e.target as Node)) {
+        setBuscadorAbierto(false);
+      }
+    };
+    document.addEventListener("mousedown", cerrarSiClicFuera);
+    return () => document.removeEventListener("mousedown", cerrarSiClicFuera);
+  }, []);
+
   const resultadosBusqueda = useMemo(() => {
     const texto = busqueda.trim().toUpperCase();
     if (!texto) return [];
@@ -161,91 +222,136 @@ export default function Graficos() {
   const elegirMoneda = (id: string) => {
     setCoin(id);
     setBusqueda("");
+    setBuscadorAbierto(false);
+    setTicker(null);
   };
 
+  const subiendo = (ticker?.changePercent ?? 0) >= 0;
+
   return (
-    <main className="min-h-screen bg-slate-950 text-white flex flex-col">
-      <header className="border-b border-slate-800 px-6 py-4">
+    <main className="min-h-screen bg-black text-white flex flex-col">
+      <header className="border-b border-white/10 px-6 py-3.5">
         <div className="max-w-[1600px] mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-bold">📊 InvestPanel</h1>
-            <p className="text-slate-400 text-sm">Gráficos de velas en tiempo real</p>
+            <h1 className="text-lg font-bold tracking-tight">InvestPanel</h1>
+            <p className="text-neutral-500 text-[11px]">Gráficos de velas en tiempo real</p>
           </div>
-          <div className="flex items-center gap-4 shrink-0">
-            <Link href="/ayuda" className="text-sm text-slate-400 hover:text-white transition">
-              📚 Guía rápida
+          <div className="flex items-center gap-5 shrink-0">
+            <Link href="/ayuda" className="text-xs text-neutral-400 hover:text-white transition">
+              Guía rápida
             </Link>
-            <Link href="/" className="text-sm text-slate-400 hover:text-white transition">
+            <Link href="/" className="text-xs text-neutral-400 hover:text-white transition">
               ← Volver al panel
             </Link>
           </div>
         </div>
       </header>
 
-      <div className="max-w-[1600px] mx-auto px-6 py-6 w-full flex-1 flex flex-col">
-        <div className="flex flex-wrap gap-2 mb-3">
-          {FAVORITOS.map((c) => (
+      <div className="max-w-[1600px] mx-auto px-6 py-5 w-full flex-1 flex flex-col">
+        {/* --- Barra de precio estilo exchange --- */}
+        <div className="flex flex-wrap items-center gap-x-8 gap-y-3 pb-4 mb-4 border-b border-white/10">
+          <div className="relative" ref={buscadorRef}>
             <button
-              key={c.id}
-              onClick={() => elegirMoneda(c.id)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                coin === c.id
-                  ? "bg-blue-600 text-white"
-                  : "bg-slate-900 text-slate-400 border border-slate-800 hover:bg-slate-800"
-              }`}
+              onClick={() => setBuscadorAbierto((v) => !v)}
+              className="flex items-center gap-2 group"
             >
-              {c.label}
+              <span className="w-7 h-7 rounded-full bg-neutral-800 border border-white/10 flex items-center justify-center text-[11px] font-bold text-neutral-300">
+                {coin.slice(0, 1)}
+              </span>
+              <span className="text-lg font-bold tracking-tight">
+                {coin}
+                <span className="text-neutral-500">/USDT</span>
+              </span>
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 12 12"
+                fill="none"
+                className={`text-neutral-500 group-hover:text-neutral-300 transition ${buscadorAbierto ? "rotate-180" : ""}`}
+              >
+                <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
             </button>
-          ))}
-        </div>
 
-        <div className="mb-4 relative max-w-sm">
-          <input
-            type="text"
-            value={busqueda}
-            onChange={(e) => setBusqueda(e.target.value)}
-            placeholder={
-              todasLasMonedas.length > 0
-                ? `Buscar entre ${todasLasMonedas.length} monedas más (ej. PEPE, SHIB, ARB)...`
-                : "Cargando el resto de las monedas..."
-            }
-            className="w-full px-3 py-2 rounded-lg text-sm bg-slate-900 border border-slate-800 text-white placeholder:text-slate-500 focus:outline-none focus:border-slate-600"
-          />
+            {buscadorAbierto && (
+              <div className="absolute z-30 mt-2 w-[340px] bg-[#111113] border border-white/10 rounded-xl shadow-2xl p-3">
+                <input
+                  autoFocus
+                  type="text"
+                  value={busqueda}
+                  onChange={(e) => setBusqueda(e.target.value)}
+                  placeholder={
+                    todasLasMonedas.length > 0
+                      ? `Buscar entre ${todasLasMonedas.length} monedas (PEPE, SHIB, ARB...)`
+                      : "Cargando monedas..."
+                  }
+                  className="w-full px-3 py-2 rounded-lg text-sm bg-black border border-white/10 text-white placeholder:text-neutral-600 focus:outline-none focus:border-neutral-600 mb-2.5"
+                />
 
-          {busqueda && (
-            <div className="absolute z-20 mt-1 w-full max-h-64 overflow-y-auto bg-slate-900 border border-slate-700 rounded-lg p-2 flex flex-wrap gap-1.5 shadow-xl">
-              {resultadosBusqueda.length === 0 ? (
-                <p className="text-xs text-slate-500 px-1 py-1">
-                  No encontramos ninguna moneda con &quot;{busqueda}&quot;.
+                <p className="text-[10px] uppercase tracking-wide text-neutral-600 px-0.5 mb-1.5">
+                  {busqueda ? "Resultados" : "Favoritos"}
                 </p>
-              ) : (
-                resultadosBusqueda.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => elegirMoneda(s)}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-medium transition ${
-                      coin === s
-                        ? "bg-blue-600 text-white"
-                        : "bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700"
-                    }`}
-                  >
-                    {etiqueta(s)}
-                  </button>
-                ))
-              )}
-            </div>
+
+                <div className="max-h-64 overflow-y-auto flex flex-wrap gap-1.5">
+                  {(busqueda ? resultadosBusqueda : FAVORITOS.map((f) => f.id)).length === 0 ? (
+                    <p className="text-xs text-neutral-600 px-1 py-1">
+                      No encontramos ninguna moneda con &quot;{busqueda}&quot;.
+                    </p>
+                  ) : (
+                    (busqueda ? resultadosBusqueda : FAVORITOS.map((f) => f.id)).map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => elegirMoneda(s)}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-medium transition ${
+                          coin === s
+                            ? "bg-white text-black"
+                            : "bg-neutral-900 text-neutral-300 border border-white/10 hover:bg-neutral-800"
+                        }`}
+                      >
+                        {etiqueta(s)}
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {ticker ? (
+            <>
+              <div className="flex flex-col leading-tight">
+                <span className={`text-2xl font-bold tabular-nums ${subiendo ? "text-[#0ecb81]" : "text-[#f6465d]"}`}>
+                  {formatPrice(ticker.lastPrice)}
+                </span>
+                <span className="text-[11px] text-neutral-500">USDT</span>
+              </div>
+
+              <StatTile
+                label="Cambio 24h"
+                value={`${subiendo ? "+" : ""}${ticker.changePercent.toFixed(2)}%`}
+                colorClass={subiendo ? "text-[#0ecb81]" : "text-[#f6465d]"}
+              />
+              <StatTile label="Máximo 24h" value={formatPrice(ticker.high)} />
+              <StatTile label="Mínimo 24h" value={formatPrice(ticker.low)} />
+              <StatTile label="Volumen 24h" value={`${formatCompact(ticker.volume)} ${coin}`} />
+              <StatTile label="Volumen 24h (USDT)" value={formatCompact(ticker.quoteVolume)} />
+            </>
+          ) : (
+            <span className="text-sm text-neutral-600">Cargando precio...</span>
           )}
         </div>
 
-        <div className="flex gap-2 mb-4 flex-wrap">
+        {/* --- Temporalidades --- */}
+        <div className="flex items-center gap-1 mb-4 flex-wrap">
+          <span className="text-[11px] text-neutral-600 mr-2 uppercase tracking-wide">Intervalo</span>
           {TIMEFRAMES.map((tf) => (
             <button
               key={tf.id}
               onClick={() => setTimeframe(tf.id)}
-              className={`px-4 py-1.5 rounded-lg text-sm font-medium transition ${
+              className={`px-2.5 py-1 rounded-md text-xs font-medium transition ${
                 timeframe === tf.id
-                  ? "bg-slate-700 text-white border border-slate-600"
-                  : "bg-slate-900 text-slate-400 border border-slate-800 hover:bg-slate-800"
+                  ? "bg-neutral-800 text-white"
+                  : "text-neutral-500 hover:text-neutral-200"
               }`}
             >
               {tf.label}
@@ -253,37 +359,35 @@ export default function Graficos() {
           ))}
         </div>
 
-        <h2 className="text-2xl font-bold mb-3">{etiqueta(coin)}</h2>
-
         {!isPro && (
-          <p className="text-xs text-slate-500 mb-3">
+          <p className="text-[11px] text-neutral-600 mb-3">
             🔔 Recibir un aviso cuando el precio llegue a una línea que marques es una función
             del{" "}
-            <Link href="/" className="text-blue-400 hover:underline">
+            <Link href="/" className="text-neutral-300 hover:underline">
               Plan Pro
             </Link>
             .
           </p>
         )}
 
-        <div className="bg-slate-900 rounded-2xl border border-slate-800 h-[600px] p-4">
+        <div className="bg-[#0a0a0b] rounded-xl border border-white/10 h-[600px] p-3">
           {loading ? (
-            <div className="h-full flex items-center justify-center text-slate-500">
+            <div className="h-full flex items-center justify-center text-neutral-600 text-sm">
               Cargando velas...
             </div>
           ) : (
-            <CandleChart candles={candles} coin={coin} isPro={isPro} proEmail={proEmail} />
+            <CandleChart candles={candles} coin={coin} timeframe={timeframe} isPro={isPro} proEmail={proEmail} />
           )}
         </div>
 
-        <p className="text-slate-600 text-xs mt-4 text-center">
+        <p className="text-neutral-700 text-[11px] mt-4 text-center">
           Datos de mercado en tiempo real. Esto no es asesoría financiera.
           {" "}Gráficos con tecnología de{" "}
           <a
             href="https://www.tradingview.com/"
             target="_blank"
             rel="noopener noreferrer"
-            className="underline hover:text-slate-400"
+            className="underline hover:text-neutral-500"
           >
             Lightweight Charts (TradingView)
           </a>
@@ -291,5 +395,16 @@ export default function Graficos() {
         </p>
       </div>
     </main>
+  );
+}
+
+function StatTile({ label, value, colorClass }: { label: string; value: string; colorClass?: string }) {
+  return (
+    <div className="flex flex-col leading-tight">
+      <span className="text-[11px] text-neutral-500 whitespace-nowrap">{label}</span>
+      <span className={`text-sm font-semibold tabular-nums whitespace-nowrap ${colorClass || "text-neutral-200"}`}>
+        {value}
+      </span>
+    </div>
   );
 }
