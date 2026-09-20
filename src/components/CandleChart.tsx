@@ -136,12 +136,17 @@ export default function CandleChart({
   timeframe,
   isPro,
   proEmail,
+  sufijo = "USDT",
 }: {
   candles: Candle[];
   coin: string;
   timeframe: string;
   isPro: boolean;
   proEmail: string | null;
+  // Se muestra como "{coin}/{sufijo}" en la leyenda del gráfico — "USDT"
+  // para cripto, la moneda de cotización ("USD", "EUR"...) para acciones e
+  // índices, o "" para no mostrar ninguna barra.
+  sufijo?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -728,7 +733,8 @@ export default function CandleChart({
         {/* Leyenda estilo exchange: símbolo/temporalidad y OHLC en vivo */}
         <div className="absolute top-1 left-2 z-10 pointer-events-none select-none">
           <p className="text-[11px] font-semibold text-neutral-400">
-            {coin}/USDT · {timeframe} · InvestPanel
+            {coin}
+            {sufijo ? `/${sufijo}` : ""} · {timeframe} · InvestPanel
           </p>
           {legendCandle && (
             <p className={`text-[11px] font-mono ${subiendo ? "text-[#0ecb81]" : "text-[#f6465d]"}`}>
