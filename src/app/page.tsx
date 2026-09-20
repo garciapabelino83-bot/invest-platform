@@ -1,15 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-} from "recharts";
+import { LineChart, Line, ResponsiveContainer } from "recharts";
+
+const VERDE = "#0ecb81";
+const ROJO = "#f6465d";
 
 type PriceData = {
   [coin: string]: { usd: number; usd_24h_change: number };
@@ -31,7 +26,7 @@ type Analysis = {
 // Con la lista de monedas ampliada a 48, si alguien agrega muchas a "Mi
 // lista" y todas piden su análisis técnico al mismo tiempo, podemos topar
 // con el límite de peticiones gratuito de la API de CoinGecko y varias
-// tarjetas se quedan cargando para siempre. Pedirlas de a poco evita eso.
+// filas se quedan cargando para siempre. Pedirlas de a poco evita eso.
 async function fetchAnalysesEnTandas(
   coins: string[],
   onResultado: (coin: string, data: Analysis) => void,
@@ -115,6 +110,14 @@ const DEFAULT_WATCHLIST = ["bitcoin", "ethereum", "solana"];
 const STORAGE_KEY = "invest-watchlist";
 const PRO_EMAIL_KEY = "invest-pro-email";
 
+// Separa una etiqueta tipo "Bitcoin (BTC)" en nombre + símbolo. Las que no
+// tienen paréntesis (XRP, BNB, EOS...) usan la misma palabra para ambos.
+function partirEtiqueta(label: string): { nombre: string; simbolo: string } {
+  const match = label.match(/^(.*) \(([^)]+)\)$/);
+  if (match) return { nombre: match[1], simbolo: match[2] };
+  return { nombre: label, simbolo: label };
+}
+
 // Formatea un precio en dólares mostrando siempre cifras significativas.
 // Con solo 2 decimales fijos, cualquier memecoin que valga fracciones de
 // centavo (ej. PEPE a $0.0000123) se veía como "$0". Para precios >= $1
@@ -131,42 +134,19 @@ function formatPrice(n: number | null | undefined): string {
   return n.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
-function SignalBadge({ signal }: { signal: string | null }) {
-  if (!signal) return null;
-  const styles: Record<string, string> = {
-    sobrecompra: "bg-red-500/15 text-red-400 border-red-500/30",
-    sobreventa: "bg-green-500/15 text-green-400 border-green-500/30",
-    neutral: "bg-slate-500/15 text-slate-400 border-slate-500/30",
-  };
-  const labels: Record<string, string> = {
-    sobrecompra: "Sobrecompra — posible caída",
-    sobreventa: "Sobreventa — posible rebote",
-    neutral: "Zona neutral",
-  };
-  return (
-    <span className={`text-xs px-2 py-1 rounded-full border ${styles[signal]}`}>
-      {labels[signal]}
-    </span>
-  );
+function colorRsi(signal: string | null) {
+  if (signal === "sobrecompra") return "text-[#f6465d]";
+  if (signal === "sobreventa") return "text-[#0ecb81]";
+  return "text-neutral-300";
 }
 
-function TrendBadge({ trend }: { trend: string | null }) {
-  if (!trend) return null;
-  const isUp = trend === "alcista";
-  return (
-    <span
-      className={`text-xs px-2 py-1 rounded-full border ${
-        isUp
-          ? "bg-green-500/15 text-green-400 border-green-500/30"
-          : "bg-red-500/15 text-red-400 border-red-500/30"
-      }`}
-    >
-      Tendencia {trend}
-    </span>
-  );
+function tituloRsi(signal: string | null) {
+  if (signal === "sobrecompra") return "Sobrecompra — posible caída";
+  if (signal === "sobreventa") return "Sobreventa — posible rebote";
+  return "Zona neutral";
 }
 
-function CoinCard({
+function CoinRow({
   coinId,
   label,
   priceData,
@@ -181,106 +161,98 @@ function CoinCard({
   onRemove: () => void;
   onRetryAnalysis: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   if (!priceData) return null;
-  const isUp = priceData.usd_24h_change >= 0;
+  const { nombre, simbolo } = partirEtiqueta(label);
+  const subiendo = priceData.usd_24h_change >= 0;
+  const tendenciaAlcista = analysis?.trend === "alcista";
 
   return (
-    <div className="bg-slate-900 rounded-2xl p-6 border border-slate-800 flex flex-col gap-4">
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-slate-400 text-sm">{label}</p>
-          <p className="text-3xl font-bold mt-1">${formatPrice(priceData.usd)}</p>
-          <p className={isUp ? "text-green-400 text-sm mt-1" : "text-red-400 text-sm mt-1"}>
-            {isUp ? "▲" : "▼"} {priceData.usd_24h_change.toFixed(2)}% (24h)
-          </p>
+    <tr className="border-b border-white/5 hover:bg-white/[0.03] transition group">
+      <td className="py-3 pl-4 pr-2">
+        <div className="flex items-center gap-2.5">
+          <span className="w-7 h-7 rounded-full bg-neutral-800 border border-white/10 flex items-center justify-center text-[10px] font-bold text-neutral-300 shrink-0">
+            {simbolo.slice(0, 1)}
+          </span>
+          <div className="leading-tight min-w-0">
+            <p className="text-sm font-semibold whitespace-nowrap">{simbolo}</p>
+            <p className="text-[11px] text-neutral-500 truncate">{nombre}</p>
+          </div>
         </div>
+      </td>
+
+      <td className="py-3 px-3 text-right font-mono text-sm tabular-nums whitespace-nowrap">
+        ${formatPrice(priceData.usd)}
+      </td>
+
+      <td
+        className={`py-3 px-3 text-right font-mono text-sm tabular-nums whitespace-nowrap ${
+          subiendo ? "text-[#0ecb81]" : "text-[#f6465d]"
+        }`}
+      >
+        {subiendo ? "+" : ""}
+        {priceData.usd_24h_change.toFixed(2)}%
+      </td>
+
+      <td className="py-3 px-3 text-right hidden sm:table-cell">
+        {analysis?.error ? (
+          <button onClick={onRetryAnalysis} className="text-neutral-500 text-xs hover:text-white hover:underline">
+            Reintentar
+          </button>
+        ) : analysis ? (
+          <span
+            className={`font-mono text-sm tabular-nums ${colorRsi(analysis.rsiSignal)}`}
+            title={tituloRsi(analysis.rsiSignal)}
+          >
+            {analysis.rsi ?? "—"}
+          </span>
+        ) : (
+          <span className="text-neutral-700 text-xs">…</span>
+        )}
+      </td>
+
+      <td className="py-3 px-3 hidden md:table-cell">
+        {analysis && !analysis.error && analysis.trend && (
+          <span
+            className={`inline-flex items-center gap-1 text-xs font-medium whitespace-nowrap ${
+              tendenciaAlcista ? "text-[#0ecb81]" : "text-[#f6465d]"
+            }`}
+          >
+            {tendenciaAlcista ? "▲" : "▼"} {analysis.trend}
+          </span>
+        )}
+      </td>
+
+      <td className="py-3 px-3 hidden lg:table-cell">
+        <div className="w-[110px] h-9">
+          {analysis && !analysis.error && analysis.history && analysis.history.length > 1 ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={analysis.history}>
+                <Line
+                  type="monotone"
+                  dataKey="price"
+                  stroke={tendenciaAlcista ? VERDE : ROJO}
+                  strokeWidth={1.5}
+                  dot={false}
+                  isAnimationActive={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="w-full h-full flex items-center text-neutral-700 text-xs">—</div>
+          )}
+        </div>
+      </td>
+
+      <td className="py-3 pr-4 pl-2 text-right">
         <button
           onClick={onRemove}
-          className="text-slate-600 hover:text-red-400 transition text-lg leading-none"
+          className="text-neutral-700 hover:text-[#f6465d] transition text-sm leading-none opacity-0 group-hover:opacity-100"
           title="Quitar de mi lista"
         >
           ✕
         </button>
-      </div>
-
-      {analysis?.error ? (
-        <div className="border-t border-slate-800 pt-4 flex items-center justify-between">
-          <p className="text-slate-500 text-xs">No se pudo cargar el análisis.</p>
-          <button
-            onClick={onRetryAnalysis}
-            className="text-blue-400 text-xs hover:underline shrink-0 ml-2"
-          >
-            Reintentar
-          </button>
-        </div>
-      ) : analysis ? (
-        <>
-          <div className="border-t border-slate-800 pt-4 flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400 text-xs">RSI (14 días)</span>
-              <span className="font-mono text-sm">{analysis.rsi ?? "—"}</span>
-            </div>
-            <SignalBadge signal={analysis.rsiSignal} />
-            <div className="flex items-center justify-between mt-1">
-              <span className="text-slate-400 text-xs">Media 7d / 30d</span>
-              <span className="font-mono text-sm">
-                ${formatPrice(analysis.sma7)} / ${formatPrice(analysis.sma30)}
-              </span>
-            </div>
-            <TrendBadge trend={analysis.trend} />
-          </div>
-
-          <button
-            onClick={() => setExpanded((e) => !e)}
-            className="text-blue-400 text-xs text-left hover:underline"
-          >
-            {expanded ? "Ocultar gráfico ▲" : "Ver gráfico de 30 días ▼"}
-          </button>
-
-          {expanded && analysis.history && (
-            <div className="h-40 -mx-2">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={analysis.history}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis
-                    dataKey="date"
-                    tick={{ fontSize: 10, fill: "#64748b" }}
-                    tickFormatter={(d: string) => d.slice(5)}
-                    minTickGap={30}
-                  />
-                  <YAxis
-                    tick={{ fontSize: 10, fill: "#64748b" }}
-                    tickFormatter={(v: number) => `$${formatPrice(v)}`}
-                    domain={["auto", "auto"]}
-                    width={70}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      background: "#0f172a",
-                      border: "1px solid #1e293b",
-                      borderRadius: 8,
-                      fontSize: 12,
-                    }}
-                    labelStyle={{ color: "#94a3b8" }}
-                    formatter={(value) => [`$${formatPrice(Number(value))}`, "Precio"]}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="price"
-                    stroke="#3b82f6"
-                    strokeWidth={2}
-                    dot={false}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </>
-      ) : (
-        <p className="text-slate-500 text-xs">Calculando análisis...</p>
-      )}
-    </div>
+      </td>
+    </tr>
   );
 }
 
@@ -420,36 +392,30 @@ export default function Dashboard() {
   );
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <header className="border-b border-slate-800 px-6 py-5">
-        <div className="max-w-5xl mx-auto flex items-center justify-between">
+    <main className="min-h-screen bg-black text-white">
+      <header className="border-b border-white/10 px-6 py-3.5">
+        <div className="max-w-[1400px] mx-auto flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-xl font-bold">📊 InvestPanel</h1>
-            <p className="text-slate-400 text-sm">
+            <h1 className="text-lg font-bold tracking-tight">InvestPanel</h1>
+            <p className="text-neutral-500 text-[11px]">
               Análisis técnico de cripto en tiempo real, en español
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            <a
-              href="/ayuda"
-              className="text-slate-400 hover:text-white transition text-sm font-medium px-2 py-2"
-            >
-              📚 Guía rápida
+          <div className="flex items-center gap-5">
+            <a href="/ayuda" className="text-xs text-neutral-400 hover:text-white transition">
+              Guía rápida
             </a>
-            <a
-              href="/graficos"
-              className="bg-slate-800 hover:bg-slate-700 transition text-sm font-medium px-4 py-2 rounded-lg"
-            >
-              📈 Ver gráficos (cripto, acciones, índices)
+            <a href="/graficos" className="text-xs text-neutral-400 hover:text-white transition">
+              Ver gráficos (cripto, acciones, índices)
             </a>
             {isPro ? (
-              <span className="bg-blue-600/20 text-blue-400 border border-blue-600/40 text-sm font-medium px-4 py-2 rounded-lg">
-                ✓ Plan Pro activo
+              <span className="bg-[#0ecb81]/10 text-[#0ecb81] border border-[#0ecb81]/30 text-xs font-medium px-3 py-1.5 rounded-lg">
+                Plan Pro activo
               </span>
             ) : (
               <button
                 onClick={() => setShowSubscribeForm(true)}
-                className="bg-blue-600 hover:bg-blue-500 transition text-sm font-medium px-4 py-2 rounded-lg"
+                className="bg-white text-black hover:bg-neutral-200 transition text-xs font-semibold px-3.5 py-1.5 rounded-lg"
               >
                 Plan Pro — $9.99/mes
               </button>
@@ -458,36 +424,36 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <div className="max-w-5xl mx-auto px-6 py-10">
+      <div className="max-w-[1400px] mx-auto px-6 py-8">
         {error && (
-          <p className="text-red-400 mb-6">No se pudieron cargar los precios.</p>
+          <p className="text-[#f6465d] text-sm mb-6">No se pudieron cargar los precios.</p>
         )}
         {!prices && !error && (
-          <p className="text-slate-400 mb-6">Cargando precios...</p>
+          <p className="text-neutral-500 text-sm mb-6">Cargando precios...</p>
         )}
 
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="text-lg font-semibold">Mi lista</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-neutral-300 uppercase tracking-wide">Mi lista</h2>
           <div className="relative">
             <button
               onClick={() => setShowAdd((s) => !s)}
-              className="bg-slate-800 hover:bg-slate-700 transition text-sm px-3 py-1.5 rounded-lg"
+              className="bg-white/5 hover:bg-white/10 border border-white/10 transition text-xs font-medium px-3 py-1.5 rounded-lg"
             >
               + Agregar moneda
             </button>
             {showAdd && (
-              <div className="absolute right-0 mt-2 w-56 bg-slate-900 border border-slate-800 rounded-xl shadow-lg z-10 max-h-72 overflow-y-auto">
-                <div className="sticky top-0 bg-slate-900 p-2 border-b border-slate-800">
+              <div className="absolute right-0 mt-2 w-60 bg-[#111113] border border-white/10 rounded-xl shadow-2xl z-20 max-h-72 overflow-y-auto">
+                <div className="sticky top-0 bg-[#111113] p-2 border-b border-white/10">
                   <input
                     autoFocus
                     value={addFilter}
                     onChange={(e) => setAddFilter(e.target.value)}
                     placeholder="Buscar moneda..."
-                    className="w-full bg-slate-800 text-sm rounded-lg px-3 py-1.5 outline-none placeholder:text-slate-500"
+                    className="w-full bg-black border border-white/10 text-sm rounded-lg px-3 py-1.5 outline-none placeholder:text-neutral-600 focus:border-neutral-600"
                   />
                 </div>
                 {availableToAdd.length === 0 && (
-                  <p className="text-slate-500 text-xs p-3">
+                  <p className="text-neutral-600 text-xs p-3">
                     {ALL_COINS.every((c) => watchlist.includes(c.id))
                       ? "Ya agregaste todas"
                       : "Sin resultados"}
@@ -497,7 +463,7 @@ export default function Dashboard() {
                   <button
                     key={c.id}
                     onClick={() => addCoin(c.id)}
-                    className="block w-full text-left px-4 py-2 text-sm hover:bg-slate-800 transition"
+                    className="block w-full text-left px-4 py-2 text-sm hover:bg-white/5 transition"
                   >
                     {c.label}
                   </button>
@@ -507,46 +473,63 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          {prices &&
-            watchlist.map((coinId) => {
-              const coinInfo = ALL_COINS.find((c) => c.id === coinId);
-              return (
-                <CoinCard
-                  key={coinId}
-                  coinId={coinId}
-                  label={coinInfo?.label || coinId}
-                  priceData={prices[coinId]}
-                  analysis={analyses[coinId]}
-                  onRemove={() => removeCoin(coinId)}
-                  onRetryAnalysis={() =>
-                    fetchAnalysesEnTandas([coinId], (coin, data) => {
-                      setAnalyses((prev) => ({ ...prev, [coin]: data }));
-                    })
-                  }
-                />
-              );
-            })}
+        <div className="bg-[#0a0a0b] rounded-xl border border-white/10 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="border-b border-white/10 text-[11px] uppercase tracking-wide text-neutral-500">
+                  <th className="text-left font-medium py-2.5 pl-4 pr-2">Moneda</th>
+                  <th className="text-right font-medium py-2.5 px-3">Precio</th>
+                  <th className="text-right font-medium py-2.5 px-3">Cambio 24h</th>
+                  <th className="text-right font-medium py-2.5 px-3 hidden sm:table-cell">RSI (14d)</th>
+                  <th className="text-left font-medium py-2.5 px-3 hidden md:table-cell">Tendencia</th>
+                  <th className="text-left font-medium py-2.5 px-3 hidden lg:table-cell">Gráfico 30d</th>
+                  <th className="py-2.5 pr-4 pl-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {prices &&
+                  watchlist.map((coinId) => {
+                    const coinInfo = ALL_COINS.find((c) => c.id === coinId);
+                    return (
+                      <CoinRow
+                        key={coinId}
+                        coinId={coinId}
+                        label={coinInfo?.label || coinId}
+                        priceData={prices[coinId]}
+                        analysis={analyses[coinId]}
+                        onRemove={() => removeCoin(coinId)}
+                        onRetryAnalysis={() =>
+                          fetchAnalysesEnTandas([coinId], (coin, data) => {
+                            setAnalyses((prev) => ({ ...prev, [coin]: data }));
+                          })
+                        }
+                      />
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+
+          {watchlist.length === 0 && prices && (
+            <p className="text-neutral-600 text-sm text-center py-10">
+              Tu lista está vacía. Agrega una moneda para empezar.
+            </p>
+          )}
         </div>
 
-        {watchlist.length === 0 && prices && (
-          <p className="text-slate-500 text-center py-10">
-            Tu lista está vacía. Agrega una moneda para empezar.
-          </p>
-        )}
-
         {checkoutMessage && (
-          <div className="mb-6 bg-blue-950/40 border border-blue-900/40 text-blue-300 text-sm rounded-xl px-4 py-3">
+          <div className="mt-6 bg-[#0ecb81]/5 border border-[#0ecb81]/20 text-[#0ecb81] text-sm rounded-xl px-4 py-3">
             {checkoutMessage}
           </div>
         )}
 
-        <div className="mt-14 bg-gradient-to-br from-blue-950/40 to-slate-900 border border-blue-900/40 rounded-2xl p-8">
+        <div className="mt-10 bg-[#0a0a0b] border border-white/10 rounded-xl p-7">
           {isPro ? (
             <>
-              <p className="text-blue-400 text-sm font-medium mb-2">🔓 Plan Pro</p>
-              <h2 className="text-2xl font-bold mb-3">¡Ya tienes acceso al Plan Pro!</h2>
-              <p className="text-slate-400 max-w-2xl">
+              <p className="text-[#0ecb81] text-[11px] font-semibold uppercase tracking-wide mb-2">Plan Pro</p>
+              <h2 className="text-xl font-bold mb-3">Ya tienes acceso al Plan Pro</h2>
+              <p className="text-neutral-400 text-sm max-w-2xl">
                 Gracias por suscribirte. Estamos construyendo las alertas automáticas y el
                 seguimiento de cartera — pronto se activan solas en tu cuenta, sin que tengas
                 que hacer nada.
@@ -554,11 +537,13 @@ export default function Dashboard() {
             </>
           ) : (
             <>
-              <p className="text-blue-400 text-sm font-medium mb-2">🔒 Plan Pro — $9.99/mes</p>
-              <h2 className="text-2xl font-bold mb-3">
+              <p className="text-neutral-500 text-[11px] font-semibold uppercase tracking-wide mb-2">
+                Plan Pro — $9.99/mes
+              </p>
+              <h2 className="text-xl font-bold mb-3">
                 Alertas automáticas y seguimiento de tu cartera
               </h2>
-              <p className="text-slate-400 max-w-2xl mb-5">
+              <p className="text-neutral-400 text-sm max-w-2xl mb-5">
                 Recibe un aviso cuando una moneda entre en zona de sobrecompra o sobreventa,
                 registra tu propia cartera y compara tu rendimiento en el tiempo — todo en
                 español, pensado para gente que empieza en cripto. Incluye 7 días de prueba
@@ -572,12 +557,12 @@ export default function Dashboard() {
                     placeholder="tu@correo.com"
                     value={subscribeEmail}
                     onChange={(e) => setSubscribeEmail(e.target.value)}
-                    className="bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-sm flex-1 focus:outline-none focus:border-blue-500"
+                    className="bg-black border border-white/10 rounded-lg px-4 py-2.5 text-sm flex-1 focus:outline-none focus:border-neutral-500"
                   />
                   <button
                     onClick={startSubscription}
                     disabled={subscribing}
-                    className="bg-blue-600 hover:bg-blue-500 transition text-sm font-medium px-5 py-2.5 rounded-lg disabled:opacity-50"
+                    className="bg-[#0ecb81] hover:opacity-90 text-black transition text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-50"
                   >
                     {subscribing ? "Un momento..." : "Empezar prueba gratis"}
                   </button>
@@ -585,19 +570,19 @@ export default function Dashboard() {
               ) : (
                 <button
                   onClick={() => setShowSubscribeForm(true)}
-                  className="bg-blue-600 hover:bg-blue-500 transition text-sm font-medium px-5 py-2.5 rounded-lg"
+                  className="bg-[#0ecb81] hover:opacity-90 text-black transition text-sm font-semibold px-5 py-2.5 rounded-lg"
                 >
                   Empezar prueba gratis de 7 días
                 </button>
               )}
               {subscribeError && (
-                <p className="text-red-400 text-xs mt-3">{subscribeError}</p>
+                <p className="text-[#f6465d] text-xs mt-3">{subscribeError}</p>
               )}
             </>
           )}
         </div>
 
-        <p className="text-slate-600 text-xs mt-8 text-center">
+        <p className="text-neutral-700 text-[11px] mt-8 text-center">
           Los precios se actualizan automáticamente. Esto no es asesoría financiera.
         </p>
       </div>
