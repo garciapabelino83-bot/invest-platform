@@ -56,6 +56,17 @@ type CanalDibujado = {
 type MomentoTipo = "ninguno" | "rsi" | "macd" | "kdj" | "wr";
 type Herramienta = "cursor" | "sr" | "tendencia" | "fibo" | "rectangulo" | "canal";
 
+// Una acción de "dibujar algo" que se puede deshacer/rehacer. Guardamos el
+// objeto completo (con sus series/priceLines nativas) para poder quitarlo
+// del gráfico al deshacer, y sus datos (a, b, precio...) para poder
+// reconstruirlo desde cero al rehacer.
+type AccionDibujo =
+  | { tipo: "sr"; item: LineaMarcada }
+  | { tipo: "tendencia"; item: TendenciaDibujada }
+  | { tipo: "fibo"; item: FiboDibujado }
+  | { tipo: "rectangulo"; item: RectanguloDibujado }
+  | { tipo: "canal"; item: CanalDibujado };
+
 // Cuántos clics necesita cada herramienta para terminar de dibujarse
 // ("sr" se maneja aparte porque no necesita un tiempo/vela, solo un precio).
 const PUNTOS_NECESARIOS: Record<Herramienta, number> = {
@@ -253,24 +264,94 @@ function IconTrash() {
     </svg>
   );
 }
+function IconCampana() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <path
+        d="M8 2.2a3 3 0 00-3 3v1.1c0 .95-.32 1.87-.9 2.6L3 10.6h10L11.9 8.9a4.2 4.2 0 01-.9-2.6V5.2a3 3 0 00-3-3z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path d="M6.5 12.6a1.5 1.5 0 003 0" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  );
+}
+function IconCamara() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <path
+        d="M2 5.6a1 1 0 011-1h1.3l.7-1.2a1 1 0 01.86-.5h4.28a1 1 0 01.86.5l.7 1.2H13a1 1 0 011 1V12a1 1 0 01-1 1H3a1 1 0 01-1-1V5.6z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <circle cx="8" cy="9" r="2.2" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+  );
+}
+function IconDeshacer() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <path d="M4 6.7h6.3a3 3 0 010 6H7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6.4 4L3.5 6.7l2.9 2.7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+function IconRehacer() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <path d="M12 6.7H5.7a3 3 0 000 6H9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M9.6 4l2.9 2.7-2.9 2.7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+function IconPantalla({ activo }: { activo: boolean }) {
+  return activo ? (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <path
+        d="M6.3 2v2.3A1.7 1.7 0 014.6 6H2.3M9.7 2v2.3c0 .94.76 1.7 1.7 1.7h2.3M6.3 14v-2.3a1.7 1.7 0 00-1.7-1.7H2.3M9.7 14v-2.3c0-.94.76-1.7 1.7-1.7h2.3"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  ) : (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <path
+        d="M2 6V3.7C2 2.76 2.76 2 3.7 2H6M10 2h2.3c.94 0 1.7.76 1.7 1.7V6M14 10v2.3c0 .94-.76 1.7-1.7 1.7H10M6 14H3.7A1.7 1.7 0 012 12.3V10"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 function RailBtn({
   activo,
   onClick,
   title,
   children,
+  disabled,
 }: {
   activo?: boolean;
   onClick: () => void;
   title: string;
   children: React.ReactNode;
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
       title={title}
+      disabled={disabled}
       className={`w-8 h-8 rounded-lg flex items-center justify-center transition ${
-        activo
+        disabled
+          ? "text-neutral-700 cursor-not-allowed"
+          : activo
           ? "bg-white text-black"
           : "text-neutral-400 hover:text-white hover:bg-white/10"
       }`}
@@ -340,6 +421,12 @@ export default function CandleChart({
   const puntosPendientesRef = useRef<PuntoDibujo[]>([]);
   const prevCandlesRef = useRef<Candle[] | null>(null);
   const indicadoresRef = useRef<HTMLDivElement>(null);
+  const alertasRef = useRef<HTMLDivElement>(null);
+  const fullscreenRef = useRef<HTMLDivElement>(null);
+  // Historial de dibujos para deshacer/rehacer (guarda el objeto completo,
+  // con sus series/priceLines nativas, para poder quitarlo o reconstruirlo).
+  const historialRef = useRef<AccionDibujo[]>([]);
+  const redoRef = useRef<AccionDibujo[]>([]);
 
   const [herramienta, setHerramienta] = useState<Herramienta>("cursor");
   const [imanActivo, setImanActivo] = useState(false);
@@ -352,6 +439,10 @@ export default function CandleChart({
   const [instruccion, setInstruccion] = useState<string | null>(null);
   const [avisoMensaje, setAvisoMensaje] = useState<string | null>(null);
   const [indicadoresAbiertos, setIndicadoresAbiertos] = useState(false);
+  const [alertasAbiertas, setAlertasAbiertas] = useState(false);
+  const [puedeDeshacer, setPuedeDeshacer] = useState(false);
+  const [puedeRehacer, setPuedeRehacer] = useState(false);
+  const [pantallaCompleta, setPantallaCompleta] = useState(false);
 
   // Leyenda OHLC arriba a la izquierda del gráfico (como en los exchanges):
   // sigue al cursor, y si no hay cursor sobre el gráfico muestra la última vela.
@@ -408,6 +499,57 @@ export default function CandleChart({
     document.addEventListener("mousedown", cerrar);
     return () => document.removeEventListener("mousedown", cerrar);
   }, [indicadoresAbiertos]);
+
+  // Cerrar el panel de alertas al hacer clic fuera de él
+  useEffect(() => {
+    if (!alertasAbiertas) return;
+    const cerrar = (e: MouseEvent) => {
+      if (alertasRef.current && !alertasRef.current.contains(e.target as Node)) {
+        setAlertasAbiertas(false);
+      }
+    };
+    document.addEventListener("mousedown", cerrar);
+    return () => document.removeEventListener("mousedown", cerrar);
+  }, [alertasAbiertas]);
+
+  // Refleja el estado real de pantalla completa del navegador (por si el
+  // usuario sale con Esc en vez de con nuestro botón).
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setPantallaCompleta(!!document.fullscreenElement);
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
+  }, []);
+
+  const alternarPantallaCompleta = useCallback(() => {
+    if (!document.fullscreenElement) {
+      fullscreenRef.current?.requestFullscreen?.().catch(() => {});
+    } else {
+      document.exitFullscreen?.().catch(() => {});
+    }
+  }, []);
+
+  // Registra un dibujo nuevo en el historial de deshacer/rehacer. Cualquier
+  // dibujo nuevo invalida el "rehacer" pendiente (igual que en cualquier
+  // editor: si deshaces y luego dibujas otra cosa, ya no puedes "rehacer"
+  // lo que habías deshecho antes).
+  const registrarAccion = useCallback((accion: AccionDibujo) => {
+    historialRef.current = [...historialRef.current, accion];
+    redoRef.current = [];
+    setPuedeDeshacer(true);
+    setPuedeRehacer(false);
+  }, []);
+
+  // Quita cualquier referencia a un dibujo borrado a mano (con la ✕) del
+  // historial de deshacer/rehacer, para que un "deshacer" nunca intente
+  // quitar algo que ya no existe.
+  const quitarDeHistorial = useCallback((localId: number) => {
+    historialRef.current = historialRef.current.filter((a) => a.item.localId !== localId);
+    redoRef.current = redoRef.current.filter((a) => a.item.localId !== localId);
+    setPuedeDeshacer(historialRef.current.length > 0);
+    setPuedeRehacer(redoRef.current.length > 0);
+  }, []);
 
   // La vela que se muestra en la leyenda por defecto es la última, hasta que
   // el usuario pase el cursor sobre otra parte del gráfico.
@@ -724,10 +866,15 @@ export default function CandleChart({
           axisLabelVisible: true,
           title: "S/R",
         });
-        setLineas((prev) => [
-          ...prev,
-          { localId: nextLocalId.current++, price: precioFinal, priceLine, alertId: null, guardando: false },
-        ]);
+        const nuevaLinea: LineaMarcada = {
+          localId: nextLocalId.current++,
+          price: precioFinal,
+          priceLine,
+          alertId: null,
+          guardando: false,
+        };
+        setLineas((prev) => [...prev, nuevaLinea]);
+        registrarAccion({ tipo: "sr", item: nuevaLinea });
         return;
       }
 
@@ -770,22 +917,34 @@ export default function CandleChart({
           { time: p1.time as UTCTimestamp, value: p1.price },
           { time: p2.time as UTCTimestamp, value: p2.price },
         ]);
-        setTendencias((prev) => [...prev, { localId: nextLocalId.current++, a, b, lineSeries }]);
+        const nuevaTendencia: TendenciaDibujada = { localId: nextLocalId.current++, a, b, lineSeries };
+        setTendencias((prev) => [...prev, nuevaTendencia]);
+        registrarAccion({ tipo: "tendencia", item: nuevaTendencia });
       } else if (herramientaActiva === "fibo") {
         const [a, b] = puntos;
         const priceLines = dibujarNivelesFibo(series, a, b, true);
-        setFibos((prev) => [...prev, { localId: nextLocalId.current++, a, b, priceLines }]);
+        const nuevoFibo: FiboDibujado = { localId: nextLocalId.current++, a, b, priceLines };
+        setFibos((prev) => [...prev, nuevoFibo]);
+        registrarAccion({ tipo: "fibo", item: nuevoFibo });
       } else if (herramientaActiva === "rectangulo") {
         const [a, b] = puntos;
-        setRectangulos((prev) => [...prev, { localId: nextLocalId.current++, a, b }]);
+        const nuevoRect: RectanguloDibujado = { localId: nextLocalId.current++, a, b };
+        setRectangulos((prev) => [...prev, nuevoRect]);
+        registrarAccion({ tipo: "rectangulo", item: nuevoRect });
       } else if (herramientaActiva === "canal") {
         const [a, b, c] = puntos;
         const offset = c.price - interpolarPrecio(a, b, c.time);
         const [lineSeries1, lineSeries2] = crearLineasCanal(chart, a, b, offset, true);
-        setCanales((prev) => [
-          ...prev,
-          { localId: nextLocalId.current++, a, b, offset, lineSeries1, lineSeries2 },
-        ]);
+        const nuevoCanal: CanalDibujado = {
+          localId: nextLocalId.current++,
+          a,
+          b,
+          offset,
+          lineSeries1,
+          lineSeries2,
+        };
+        setCanales((prev) => [...prev, nuevoCanal]);
+        registrarAccion({ tipo: "canal", item: nuevoCanal });
       }
 
       setInstruccion(mensajeParaPaso(herramientaActiva, 0));
@@ -922,6 +1081,7 @@ export default function CandleChart({
   const borrarLinea = useCallback(async (linea: LineaMarcada) => {
     seriesRef.current?.removePriceLine(linea.priceLine);
     setLineas((prev) => prev.filter((l) => l.localId !== linea.localId));
+    quitarDeHistorial(linea.localId);
     if (linea.alertId) {
       try {
         await fetch(`/api/alerts?id=${linea.alertId}`, { method: "DELETE" });
@@ -930,28 +1090,32 @@ export default function CandleChart({
         // desapareció del gráfico para el usuario
       }
     }
-  }, []);
+  }, [quitarDeHistorial]);
 
   const borrarTendencia = useCallback((t: TendenciaDibujada) => {
     chartRef.current?.removeSeries(t.lineSeries);
     setTendencias((prev) => prev.filter((x) => x.localId !== t.localId));
-  }, []);
+    quitarDeHistorial(t.localId);
+  }, [quitarDeHistorial]);
 
   const borrarFibo = useCallback((f: FiboDibujado) => {
     f.priceLines.forEach((pl) => seriesRef.current?.removePriceLine(pl));
     setFibos((prev) => prev.filter((x) => x.localId !== f.localId));
-  }, []);
+    quitarDeHistorial(f.localId);
+  }, [quitarDeHistorial]);
 
   const borrarRectangulo = useCallback((r: RectanguloDibujado) => {
     rectDivsRef.current.delete(r.localId);
     setRectangulos((prev) => prev.filter((x) => x.localId !== r.localId));
-  }, []);
+    quitarDeHistorial(r.localId);
+  }, [quitarDeHistorial]);
 
   const borrarCanal = useCallback((c: CanalDibujado) => {
     chartRef.current?.removeSeries(c.lineSeries1);
     chartRef.current?.removeSeries(c.lineSeries2);
     setCanales((prev) => prev.filter((x) => x.localId !== c.localId));
-  }, []);
+    quitarDeHistorial(c.localId);
+  }, [quitarDeHistorial]);
 
   const borrarTodo = () => {
     lineas.forEach((l) => borrarLinea(l));
@@ -959,7 +1123,164 @@ export default function CandleChart({
     fibos.forEach((f) => borrarFibo(f));
     rectangulos.forEach((r) => borrarRectangulo(r));
     canales.forEach((c) => borrarCanal(c));
+    historialRef.current = [];
+    redoRef.current = [];
+    setPuedeDeshacer(false);
+    setPuedeRehacer(false);
   };
+
+  // Deshace el último dibujo (quita el más reciente del gráfico) y lo manda
+  // al historial de "rehacer" con todos sus datos, para poder recrearlo.
+  const deshacer = useCallback(() => {
+    const historial = historialRef.current;
+    if (historial.length === 0) return;
+    const accion = historial[historial.length - 1];
+    historialRef.current = historial.slice(0, -1);
+    redoRef.current = [...redoRef.current, accion];
+
+    if (accion.tipo === "sr") {
+      seriesRef.current?.removePriceLine(accion.item.priceLine);
+      setLineas((prev) => prev.filter((l) => l.localId !== accion.item.localId));
+    } else if (accion.tipo === "tendencia") {
+      chartRef.current?.removeSeries(accion.item.lineSeries);
+      setTendencias((prev) => prev.filter((t) => t.localId !== accion.item.localId));
+    } else if (accion.tipo === "fibo") {
+      accion.item.priceLines.forEach((pl) => seriesRef.current?.removePriceLine(pl));
+      setFibos((prev) => prev.filter((f) => f.localId !== accion.item.localId));
+    } else if (accion.tipo === "rectangulo") {
+      rectDivsRef.current.delete(accion.item.localId);
+      setRectangulos((prev) => prev.filter((r) => r.localId !== accion.item.localId));
+    } else if (accion.tipo === "canal") {
+      chartRef.current?.removeSeries(accion.item.lineSeries1);
+      chartRef.current?.removeSeries(accion.item.lineSeries2);
+      setCanales((prev) => prev.filter((c) => c.localId !== accion.item.localId));
+    }
+
+    setPuedeDeshacer(historialRef.current.length > 0);
+    setPuedeRehacer(true);
+  }, []);
+
+  // Rehace el último dibujo deshecho: como sus series/priceLines nativas ya
+  // se destruyeron al deshacer, hay que reconstruirlas desde los mismos
+  // datos (a, b, precio, offset...) que guardamos en el historial.
+  const rehacer = useCallback(() => {
+    const redo = redoRef.current;
+    if (redo.length === 0) return;
+    const accion = redo[redo.length - 1];
+    redoRef.current = redo.slice(0, -1);
+    const chart = chartRef.current;
+    const series = seriesRef.current;
+    if (!chart || !series) return;
+
+    if (accion.tipo === "sr") {
+      const item = accion.item;
+      const priceLine = series.createPriceLine({
+        price: item.price,
+        color: item.alertId ? "#22d3ee" : "#f0b90b",
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: item.alertId ? "🔔 S/R" : "S/R",
+      });
+      const nuevo = { ...item, priceLine };
+      setLineas((prev) => [...prev, nuevo]);
+      historialRef.current = [...historialRef.current, { tipo: "sr", item: nuevo }];
+    } else if (accion.tipo === "tendencia") {
+      const item = accion.item;
+      const lineSeries = chart.addLineSeries({
+        color: "#3b82f6",
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      const [p1, p2] = item.a.time <= item.b.time ? [item.a, item.b] : [item.b, item.a];
+      lineSeries.setData([
+        { time: p1.time as UTCTimestamp, value: p1.price },
+        { time: p2.time as UTCTimestamp, value: p2.price },
+      ]);
+      const nuevo = { ...item, lineSeries };
+      setTendencias((prev) => [...prev, nuevo]);
+      historialRef.current = [...historialRef.current, { tipo: "tendencia", item: nuevo }];
+    } else if (accion.tipo === "fibo") {
+      const item = accion.item;
+      const priceLines = dibujarNivelesFibo(series, item.a, item.b, dibujosVisibles);
+      const nuevo = { ...item, priceLines };
+      setFibos((prev) => [...prev, nuevo]);
+      historialRef.current = [...historialRef.current, { tipo: "fibo", item: nuevo }];
+    } else if (accion.tipo === "rectangulo") {
+      const item = accion.item;
+      setRectangulos((prev) => [...prev, item]);
+      historialRef.current = [...historialRef.current, { tipo: "rectangulo", item }];
+    } else if (accion.tipo === "canal") {
+      const item = accion.item;
+      const [lineSeries1, lineSeries2] = crearLineasCanal(chart, item.a, item.b, item.offset, dibujosVisibles);
+      const nuevo = { ...item, lineSeries1, lineSeries2 };
+      setCanales((prev) => [...prev, nuevo]);
+      historialRef.current = [...historialRef.current, { tipo: "canal", item: nuevo }];
+    }
+
+    setPuedeRehacer(redoRef.current.length > 0);
+    setPuedeDeshacer(true);
+  }, [dibujosVisibles]);
+
+  // Atajos de teclado: Ctrl/Cmd+Z para deshacer, Ctrl/Cmd+Shift+Z o
+  // Ctrl/Cmd+Y para rehacer (igual que en la mayoría de editores).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const tecla = e.key.toLowerCase();
+      if (tecla === "z" && !e.shiftKey) {
+        e.preventDefault();
+        deshacer();
+      } else if ((tecla === "z" && e.shiftKey) || tecla === "y") {
+        e.preventDefault();
+        rehacer();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [deshacer, rehacer]);
+
+  // Descarga el gráfico actual como imagen PNG. Las velas, medias móviles,
+  // Fibonacci, tendencias, canal y el panel de momento ya son parte del
+  // lienzo nativo de lightweight-charts y salen solos; los únicos que hay
+  // que "dibujar a mano" encima son los rectángulos (son divs de HTML
+  // superpuestos, no parte del lienzo).
+  const capturarGrafico = useCallback(() => {
+    const chart = chartRef.current;
+    const series = seriesRef.current;
+    if (!chart || !series || !containerRef.current) return;
+
+    const canvas = chart.takeScreenshot();
+    const ctx = canvas.getContext("2d");
+    if (ctx && dibujosVisibles && rectangulos.length > 0) {
+      const escala = canvas.width / containerRef.current.clientWidth;
+      ctx.save();
+      ctx.scale(escala, escala);
+      rectangulos.forEach((r) => {
+        const x1 = chart.timeScale().timeToCoordinate(r.a.time as UTCTimestamp);
+        const x2 = chart.timeScale().timeToCoordinate(r.b.time as UTCTimestamp);
+        const y1 = series.priceToCoordinate(r.a.price);
+        const y2 = series.priceToCoordinate(r.b.price);
+        if (x1 === null || x2 === null || y1 === null || y2 === null) return;
+        const x = Math.min(x1, x2);
+        const y = Math.min(y1, y2);
+        const w = Math.abs(x2 - x1);
+        const h = Math.abs(y2 - y1);
+        ctx.fillStyle = "rgba(251,191,36,0.1)";
+        ctx.strokeStyle = "rgba(251,191,36,0.7)";
+        ctx.lineWidth = 2;
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeRect(x, y, w, h);
+      });
+      ctx.restore();
+    }
+
+    const link = document.createElement("a");
+    link.download = `${coin}-${timeframe}.png`;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  }, [coin, timeframe, rectangulos, dibujosVisibles]);
 
   // Activa el aviso push para una línea: pide permiso de notificaciones,
   // suscribe el navegador y guarda el aviso en el servidor.
@@ -1048,9 +1369,76 @@ export default function CandleChart({
   const cambioPct = legendCandle && legendCandle.open !== 0 ? (cambio / legendCandle.open) * 100 : 0;
   const subiendo = cambio >= 0;
   const totalDibujado = lineas.length + tendencias.length + fibos.length + rectangulos.length + canales.length;
+  const alertasActivas = lineas.filter((l) => l.alertId);
 
   return (
-    <div className="relative w-full h-full flex">
+    <div
+      ref={fullscreenRef}
+      className={`relative w-full h-full flex flex-col ${pantallaCompleta ? "bg-[#0a0a0b] p-3" : ""}`}
+    >
+      {/* --- Barra superior estilo TradingView: alertas, captura, deshacer/rehacer, pantalla completa --- */}
+      <div className="flex items-center justify-end gap-1 pb-2 mb-2 border-b border-white/10 shrink-0">
+        <div className="relative" ref={alertasRef}>
+          <RailBtn
+            activo={alertasAbiertas}
+            onClick={() => setAlertasAbiertas((v) => !v)}
+            title="Alertas de precio"
+          >
+            <IconCampana />
+          </RailBtn>
+          {alertasActivas.length > 0 && (
+            <span className="absolute -top-1 -right-1 bg-cyan-500 text-black text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center pointer-events-none">
+              {alertasActivas.length}
+            </span>
+          )}
+          {alertasAbiertas && (
+            <div className="absolute z-20 right-0 top-9 w-64 bg-[#111113] border border-white/10 rounded-xl shadow-2xl p-3">
+              <p className="text-[10px] uppercase tracking-wide text-neutral-600 mb-2">
+                Alertas de precio activas
+              </p>
+              {alertasActivas.length === 0 ? (
+                <p className="text-xs text-neutral-500">
+                  No tienes alertas activas en este gráfico. Marca una línea con la herramienta S/R y
+                  pulsa 🔕 para avisarte cuando el precio llegue ahí (función del Plan Pro).
+                </p>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  {alertasActivas.map((l) => (
+                    <div key={l.localId} className="flex items-center justify-between gap-2 text-xs">
+                      <span className="font-mono text-cyan-300">
+                        🔔 ${l.price.toLocaleString("es", { maximumFractionDigits: 2 })}
+                      </span>
+                      <button
+                        onClick={() => borrarLinea(l)}
+                        className="text-neutral-600 hover:text-[#f6465d] transition px-1"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <RailBtn onClick={capturarGrafico} title="Descargar el gráfico como imagen">
+          <IconCamara />
+        </RailBtn>
+        <RailBtn onClick={deshacer} disabled={!puedeDeshacer} title="Deshacer (Ctrl+Z)">
+          <IconDeshacer />
+        </RailBtn>
+        <RailBtn onClick={rehacer} disabled={!puedeRehacer} title="Rehacer (Ctrl+Shift+Z)">
+          <IconRehacer />
+        </RailBtn>
+        <RailBtn
+          onClick={alternarPantallaCompleta}
+          title={pantallaCompleta ? "Salir de pantalla completa" : "Pantalla completa"}
+        >
+          <IconPantalla activo={pantallaCompleta} />
+        </RailBtn>
+      </div>
+
+      <div className="relative w-full flex-1 min-h-0 flex">
       {/* --- Riel vertical de herramientas (estilo exchange) --- */}
       <div className="flex flex-col items-center gap-1 pr-2 pt-1 border-r border-white/10 mr-2">
         <RailBtn activo={herramienta === "cursor"} onClick={() => setHerramienta("cursor")} title="Cursor">
@@ -1301,6 +1689,7 @@ export default function CandleChart({
             />
           ))}
         </div>
+      </div>
       </div>
     </div>
   );
