@@ -56,6 +56,7 @@ const INDICE = [
   { id: "mercados", label: "Acciones e índices (no solo cripto)" },
   { id: "indicadores", label: "Los indicadores, explicados sin tecnicismos" },
   { id: "avisos", label: "Marcar niveles y recibir avisos" },
+  { id: "herramientas", label: "Herramientas: calculadora, convertidor y comparador" },
   { id: "plan-pro", label: "Plan Pro" },
 ];
 
@@ -242,14 +243,43 @@ export default function Ayuda() {
 
         <Seccion id="avisos" emoji="🔔" titulo="Marcar niveles y recibir avisos">
           <p>
-            Dentro de un gráfico, dale a <strong>&quot;✏️ Marcar S/R&quot;</strong> (soporte/resistencia)
-            y luego haz clic sobre el precio donde quieres poner una línea. Con la línea puesta,
-            puedes darle al ícono 🔔 para que InvestPanel te mande una notificación a tu
-            navegador cuando el precio llegue ahí — así no tienes que quedarte mirando la
-            pantalla.
+            A la izquierda de cada gráfico hay una barra de herramientas de dibujo. El ícono de
+            la línea (◆—◆) es para <strong>marcar soporte/resistencia</strong>: actívalo y haz
+            clic sobre el precio donde quieres poner una línea horizontal. Con la línea puesta,
+            dale al ícono 🔔 para que InvestPanel te mande una notificación a tu navegador cuando
+            el precio llegue ahí — así no tienes que quedarte mirando la pantalla.
+          </p>
+          <p>
+            Los otros dos íconos de esa misma barra son para dibujar sobre el gráfico: una{" "}
+            <strong>línea de tendencia</strong> (haz clic en un punto y luego en otro, para
+            trazar la línea entre ambos) y un <strong>retroceso de Fibonacci</strong> (haz clic
+            en un máximo y luego en un mínimo del precio, y InvestPanel dibuja automáticamente
+            los 7 niveles que usan los traders para ubicar posibles zonas de rebote). Con el
+            ícono de la papelera borras todo lo que hayas dibujado.
           </p>
           <p className="text-slate-500 text-xs">
-            Los avisos de precio son una función del Plan Pro (ver abajo).
+            Los avisos automáticos de precio (🔔) son una función del Plan Pro (ver abajo); las
+            líneas de tendencia y Fibonacci están disponibles para todos.
+          </p>
+        </Seccion>
+
+        <Seccion id="herramientas" emoji="🧮" titulo="Herramientas: calculadora, convertidor y comparador">
+          <p>
+            Desde el menú superior entra a <strong>&quot;🧮 Herramientas&quot;</strong> para usar tres
+            ayudas extra, sin necesidad de Plan Pro:
+          </p>
+          <p>
+            <strong>Calculadora de ganancias/pérdidas:</strong> escribe tu precio de entrada, de
+            salida y cuánto invertiste (en compra o en venta en corto), y te muestra cuánto
+            ganarías o perderías, ya restando una comisión aproximada.
+          </p>
+          <p>
+            <strong>Convertidor de monedas:</strong> convierte entre criptomonedas y monedas
+            como dólar, euro o pesos latinoamericanos, con precios actualizados.
+          </p>
+          <p>
+            <strong>Comparador de monedas:</strong> elige 2 a 4 monedas y un período (7 días, 30
+            días, etc.) para ver, en un mismo gráfico, cuál subió o bajó más en porcentaje.
           </p>
         </Seccion>
 
