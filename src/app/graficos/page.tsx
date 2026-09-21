@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import Link from "next/link";
 import CandleChart from "@/components/CandleChart";
+import AssetIcon, { TipoActivo } from "@/components/AssetIcon";
 
 // Monedas de acceso rápido (las más conocidas), siempre visibles arriba de
 // una vez. El resto de las monedas (memecoins, altcoins, lo que sea que
@@ -100,15 +101,33 @@ const NOMBRES: Record<string, string> = {
   WLD: "Worldcoin",
 };
 
-function etiquetaCripto(symbol: string) {
-  const nombre = NOMBRES[symbol];
-  return nombre ? `${nombre} (${symbol})` : symbol;
-}
-
 function etiquetaMercado(symbol: string) {
   const fav = FAVORITOS_MERCADOS.find((f) => f.id === symbol);
   return fav ? fav.label : symbol;
 }
+
+// Para elegir el logo correcto: los índices bursátiles empiezan con "^" o
+// son un código numérico de bolsa (ej. "000001.SS", la de Shanghai) y no
+// tienen un logo de empresa como sí lo tiene una acción.
+function tipoDeSimboloMercado(id: string): "accion" | "indice" {
+  return id.startsWith("^") || /^[0-9]/.test(id) ? "indice" : "accion";
+}
+
+const CATEGORIAS: { id: "todos" | "cripto" | "acciones" | "indices"; label: string }[] = [
+  { id: "todos", label: "Todos" },
+  { id: "cripto", label: "Cripto" },
+  { id: "acciones", label: "Acciones" },
+  { id: "indices", label: "Índices" },
+];
+
+type Fila = {
+  key: string;
+  simbolo: string;
+  nombre: string;
+  tipoDato: "cripto" | "mercado";
+  tipoIcono: TipoActivo;
+  tag: string;
+};
 
 const TIMEFRAMES = [
   { id: "1s", label: "1s" },
@@ -183,7 +202,7 @@ export default function Graficos() {
   // --- Lista completa de monedas (para el buscador de cripto) ---
   const [todasLasMonedas, setTodasLasMonedas] = useState<string[]>([]);
   const [busqueda, setBusqueda] = useState("");
-  const [simboloManual, setSimboloManual] = useState("");
+  const [categoria, setCategoria] = useState<"todos" | "cripto" | "acciones" | "indices">("todos");
   const [buscadorAbierto, setBuscadorAbierto] = useState(false);
   const buscadorRef = useRef<HTMLDivElement>(null);
 
@@ -287,15 +306,70 @@ export default function Graficos() {
 
   const elegirSimbolo = (id: string) => {
     setSymbol(id.toUpperCase());
-    setSimboloManual("");
+    setBusqueda("");
     setBuscadorAbierto(false);
     setTicker(null);
   };
 
-  const enviarSimboloManual = (e: React.FormEvent) => {
-    e.preventDefault();
-    const limpio = simboloManual.trim().toUpperCase();
-    if (limpio) elegirSimbolo(limpio);
+  // --- Buscador unificado (estilo TradingView): cripto + acciones/índices
+  // en una sola lista, con logos y categorías, en vez de dos listas
+  // separadas según el modo en el que estuviéramos antes de abrirlo.
+  const filasCripto: Fila[] = useMemo(() => {
+    const lista = busqueda.trim() ? resultadosBusqueda : FAVORITOS_CRIPTO.map((f) => f.id);
+    return lista.map((s) => ({
+      key: `c-${s}`,
+      simbolo: s,
+      nombre: NOMBRES[s] || s,
+      tipoDato: "cripto",
+      tipoIcono: "cripto",
+      tag: "Cripto · Binance",
+    }));
+  }, [busqueda, resultadosBusqueda]);
+
+  const filasMercados: Fila[] = useMemo(() => {
+    const texto = busqueda.trim().toUpperCase();
+    const base = texto
+      ? FAVORITOS_MERCADOS.filter(
+          (f) => f.id.toUpperCase().includes(texto) || f.label.toUpperCase().includes(texto)
+        )
+      : FAVORITOS_MERCADOS;
+    return base.map((f) => {
+      const tipoIcono = tipoDeSimboloMercado(f.id);
+      return {
+        key: `m-${f.id}`,
+        simbolo: f.id,
+        nombre: f.label,
+        tipoDato: "mercado",
+        tipoIcono,
+        tag: tipoIcono === "indice" ? "Índice" : "Acción",
+      };
+    });
+  }, [busqueda]);
+
+  const filasVisibles: Fila[] = useMemo(() => {
+    if (categoria === "cripto") return filasCripto;
+    if (categoria === "acciones") return filasMercados.filter((f) => f.tipoIcono === "accion");
+    if (categoria === "indices") return filasMercados.filter((f) => f.tipoIcono === "indice");
+    return [...filasCripto, ...filasMercados];
+  }, [categoria, filasCripto, filasMercados]);
+
+  const textoBusquedaLimpio = busqueda.trim().toUpperCase();
+  const hayCoincidenciaExacta = filasMercados.some((f) => f.simbolo.toUpperCase() === textoBusquedaLimpio);
+  const mostrarBusquedaManual = textoBusquedaLimpio.length > 0 && !hayCoincidenciaExacta && categoria !== "cripto";
+
+  const elegirActivo = (fila: Fila) => {
+    if (fila.tipoDato === "cripto") {
+      setModo("cripto");
+      elegirMoneda(fila.simbolo);
+    } else {
+      setModo("mercados");
+      elegirSimbolo(fila.simbolo);
+    }
+  };
+
+  const buscarSimboloExacto = () => {
+    setModo("mercados");
+    elegirSimbolo(busqueda.trim());
   };
 
   const subiendo = (ticker?.changePercent ?? 0) >= 0;
@@ -350,9 +424,11 @@ export default function Graficos() {
               onClick={() => setBuscadorAbierto((v) => !v)}
               className="flex items-center gap-2 group"
             >
-              <span className="w-7 h-7 rounded-full bg-neutral-800 border border-white/10 flex items-center justify-center text-[11px] font-bold text-neutral-300">
-                {activo.replace(/^\^/, "").slice(0, 1)}
-              </span>
+              <AssetIcon
+                symbol={activo}
+                tipo={modo === "cripto" ? "cripto" : tipoDeSimboloMercado(activo)}
+                size={28}
+              />
               <span className="text-lg font-bold tracking-tight">
                 {modo === "cripto" ? (
                   <>
@@ -374,80 +450,109 @@ export default function Graficos() {
               </svg>
             </button>
 
-            {buscadorAbierto && modo === "cripto" && (
-              <div className="absolute z-30 mt-2 w-[340px] bg-[#111113] border border-white/10 rounded-xl shadow-2xl p-3">
-                <input
-                  autoFocus
-                  type="text"
-                  value={busqueda}
-                  onChange={(e) => setBusqueda(e.target.value)}
-                  placeholder={
-                    todasLasMonedas.length > 0
-                      ? `Buscar entre ${todasLasMonedas.length} monedas (PEPE, SHIB, ARB...)`
-                      : "Cargando monedas..."
-                  }
-                  className="w-full px-3 py-2 rounded-lg text-sm bg-black border border-white/10 text-white placeholder:text-neutral-600 focus:outline-none focus:border-neutral-600 mb-2.5"
-                />
-
-                <p className="text-[10px] uppercase tracking-wide text-neutral-600 px-0.5 mb-1.5">
-                  {busqueda ? "Resultados" : "Favoritos"}
-                </p>
-
-                <div className="max-h-64 overflow-y-auto flex flex-wrap gap-1.5">
-                  {(busqueda ? resultadosBusqueda : FAVORITOS_CRIPTO.map((f) => f.id)).length === 0 ? (
-                    <p className="text-xs text-neutral-600 px-1 py-1">
-                      No encontramos ninguna moneda con &quot;{busqueda}&quot;.
-                    </p>
-                  ) : (
-                    (busqueda ? resultadosBusqueda : FAVORITOS_CRIPTO.map((f) => f.id)).map((s) => (
-                      <button
-                        key={s}
-                        onClick={() => elegirMoneda(s)}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-medium transition ${
-                          coin === s
-                            ? "bg-white text-black"
-                            : "bg-neutral-900 text-neutral-300 border border-white/10 hover:bg-neutral-800"
-                        }`}
+            {buscadorAbierto && (
+              <div
+                className="fixed inset-0 z-40 bg-black/70 flex items-start justify-center pt-24 px-4"
+                onClick={() => setBuscadorAbierto(false)}
+              >
+                <div
+                  className="w-full max-w-xl bg-[#111113] border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[75vh]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="p-3 border-b border-white/10 shrink-0">
+                    <div className="relative">
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 16 16"
+                        fill="none"
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-500"
                       >
-                        {etiquetaCripto(s)}
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-            )}
+                        <circle cx="7" cy="7" r="5.2" stroke="currentColor" strokeWidth="1.4" />
+                        <path d="M11 11L14.5 14.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                      </svg>
+                      <input
+                        autoFocus
+                        type="text"
+                        value={busqueda}
+                        onChange={(e) => setBusqueda(e.target.value)}
+                        placeholder="Buscar símbolo, cripto o acción (BTC, AAPL, PEPE, ^IBEX...)"
+                        className="w-full pl-9 pr-3 py-2.5 rounded-lg text-sm bg-black border border-white/10 text-white placeholder:text-neutral-600 focus:outline-none focus:border-neutral-600"
+                      />
+                    </div>
 
-            {buscadorAbierto && modo === "mercados" && (
-              <div className="absolute z-30 mt-2 w-[340px] bg-[#111113] border border-white/10 rounded-xl shadow-2xl p-3">
-                <form onSubmit={enviarSimboloManual} className="mb-2.5">
-                  <input
-                    autoFocus
-                    type="text"
-                    value={simboloManual}
-                    onChange={(e) => setSimboloManual(e.target.value)}
-                    placeholder="Escribe un símbolo (ej. AAPL, TSLA, ^IBEX)"
-                    className="w-full px-3 py-2 rounded-lg text-sm bg-black border border-white/10 text-white placeholder:text-neutral-600 focus:outline-none focus:border-neutral-600"
-                  />
-                </form>
+                    <div className="flex gap-1 mt-3 flex-wrap">
+                      {CATEGORIAS.map((c) => (
+                        <button
+                          key={c.id}
+                          onClick={() => setCategoria(c.id)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                            categoria === c.id
+                              ? "bg-white text-black"
+                              : "text-neutral-400 hover:bg-white/10 hover:text-white"
+                          }`}
+                        >
+                          {c.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
 
-                <p className="text-[10px] uppercase tracking-wide text-neutral-600 px-0.5 mb-1.5">
-                  Índices y acciones populares
-                </p>
+                  <div className="overflow-y-auto p-2">
+                    {filasVisibles.length === 0 && !mostrarBusquedaManual ? (
+                      <p className="text-xs text-neutral-600 px-3 py-8 text-center">
+                        No encontramos nada con &quot;{busqueda}&quot;.
+                      </p>
+                    ) : (
+                      <>
+                        {filasVisibles.map((f) => {
+                          const seleccionado =
+                            f.tipoDato === "cripto"
+                              ? modo === "cripto" && coin === f.simbolo
+                              : modo === "mercados" && symbol === f.simbolo;
+                          return (
+                            <button
+                              key={f.key}
+                              onClick={() => elegirActivo(f)}
+                              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition ${
+                                seleccionado ? "bg-white/10" : "hover:bg-white/5"
+                              }`}
+                            >
+                              <AssetIcon symbol={f.simbolo} tipo={f.tipoIcono} size={28} />
+                              <span className="flex-1 min-w-0">
+                                <span className="block text-sm font-semibold text-white truncate">
+                                  {f.simbolo.replace(/^\^/, "")}
+                                </span>
+                                <span className="block text-[11px] text-neutral-500 truncate">{f.nombre}</span>
+                              </span>
+                              <span className="text-[10px] text-neutral-600 uppercase tracking-wide shrink-0">
+                                {f.tag}
+                              </span>
+                            </button>
+                          );
+                        })}
 
-                <div className="max-h-64 overflow-y-auto flex flex-wrap gap-1.5">
-                  {FAVORITOS_MERCADOS.map((f) => (
-                    <button
-                      key={f.id}
-                      onClick={() => elegirSimbolo(f.id)}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-medium transition ${
-                        symbol === f.id
-                          ? "bg-white text-black"
-                          : "bg-neutral-900 text-neutral-300 border border-white/10 hover:bg-neutral-800"
-                      }`}
-                    >
-                      {f.label}
-                    </button>
-                  ))}
+                        {mostrarBusquedaManual && (
+                          <button
+                            onClick={buscarSimboloExacto}
+                            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left border border-dashed border-white/15 hover:bg-white/5 transition mt-1"
+                          >
+                            <span className="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center text-neutral-400 text-xs">
+                              🔎
+                            </span>
+                            <span className="flex-1 min-w-0">
+                              <span className="block text-sm font-semibold text-white">
+                                Buscar &quot;{textoBusquedaLimpio}&quot; en acciones e índices
+                              </span>
+                              <span className="block text-[11px] text-neutral-500">
+                                Si sabes el símbolo exacto (ej. AAPL, ^IBEX)
+                              </span>
+                            </span>
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
