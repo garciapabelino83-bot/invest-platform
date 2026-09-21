@@ -312,6 +312,9 @@ export default function Graficos() {
             <Link href="/ayuda" className="text-xs text-neutral-400 hover:text-white transition">
               Guía rápida
             </Link>
+            <Link href="/herramientas" className="text-xs text-neutral-400 hover:text-white transition">
+              🧮 Herramientas
+            </Link>
             <Link href="/" className="text-xs text-neutral-400 hover:text-white transition">
               ← Volver al panel
             </Link>
