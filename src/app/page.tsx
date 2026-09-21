@@ -408,6 +408,9 @@ export default function Dashboard() {
             <a href="/graficos" className="text-xs text-neutral-400 hover:text-white transition">
               Ver gráficos (cripto, acciones, índices)
             </a>
+            <a href="/herramientas" className="text-xs text-neutral-400 hover:text-white transition">
+              🧮 Herramientas
+            </a>
             {isPro ? (
               <span className="bg-[#0ecb81]/10 text-[#0ecb81] border border-[#0ecb81]/30 text-xs font-medium px-3 py-1.5 rounded-lg">
                 Plan Pro activo
