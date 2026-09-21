@@ -53,6 +53,7 @@ const INDICE = [
   { id: "mi-lista", label: "Mi lista (panel principal)" },
   { id: "etiquetas", label: "Qué significan las etiquetas de color" },
   { id: "velas", label: "Cómo leer un gráfico de velas" },
+  { id: "mercados", label: "Acciones e índices (no solo cripto)" },
   { id: "indicadores", label: "Los indicadores, explicados sin tecnicismos" },
   { id: "avisos", label: "Marcar niveles y recibir avisos" },
   { id: "plan-pro", label: "Plan Pro" },
@@ -98,19 +99,20 @@ export default function Ayuda() {
         <Seccion id="mi-lista" emoji="📊" titulo="Mi lista (panel principal)">
           <p>
             Cuando entras a InvestPanel, lo primero que ves es <strong>&quot;Mi lista&quot;</strong>:
-            una tarjeta por cada moneda que estás siguiendo, con su precio actual, cuánto subió
-            o bajó en las últimas 24 horas, y un mini análisis técnico automático.
+            una fila por cada moneda que estás siguiendo, con su precio actual, cuánto subió
+            o bajó en las últimas 24 horas, y un mini análisis técnico automático (RSI y
+            tendencia).
           </p>
           <p>
             Para agregar una moneda, dale a <strong>&quot;+ Agregar moneda&quot;</strong> arriba a la
             derecha y busca por nombre o símbolo (por ejemplo &quot;pepe&quot; o &quot;btc&quot;). Para
-            quitar una, dale a la ✕ en la esquina de su tarjeta. Tu lista se guarda sola en tu
+            quitar una, dale a la ✕ al final de su fila. Tu lista se guarda sola en tu
             navegador, así que la próxima vez que entres seguirá ahí.
           </p>
         </Seccion>
 
         <Seccion id="etiquetas" emoji="🏷️" titulo="Qué significan las etiquetas de color">
-          <p>Cada tarjeta trae unas etiquetas que resumen el análisis técnico en una sola palabra:</p>
+          <p>Cada fila trae unas etiquetas que resumen el análisis técnico en una sola palabra:</p>
           <div className="grid sm:grid-cols-2 gap-3">
             <div className="border border-red-500/30 bg-red-500/10 rounded-xl p-3">
               <p className="text-red-400 font-semibold text-sm">Sobrecompra — posible caída</p>
@@ -170,6 +172,21 @@ export default function Ayuda() {
           </ul>
         </Seccion>
 
+        <Seccion id="mercados" emoji="🏦" titulo="Acciones e índices (no solo cripto)">
+          <p>
+            Arriba del gráfico hay dos pestañas: <strong>&quot;Cripto&quot;</strong> y{" "}
+            <strong>&quot;Acciones e índices&quot;</strong>. En la segunda puedes seguir el S&amp;P
+            500, el Dow Jones, el Nasdaq, y otros índices bursátiles importantes (IBEX, DAX,
+            CAC 40, FTSE, Nikkei, Hang Seng, entre otros), además de acciones conocidas como
+            Apple, Microsoft, Amazon, Nvidia o Tesla.
+          </p>
+          <p className="text-slate-500 text-xs">
+            Los mercados de acciones no operan las 24 horas como la cripto (cierran de noche y
+            los fines de semana), así que fuera de horario de mercado vas a ver el último precio
+            de cierre en vez de uno que se mueve en vivo.
+          </p>
+        </Seccion>
+
         <Seccion id="indicadores" emoji="🧮" titulo="Los indicadores, explicados sin tecnicismos">
           <p>
             Arriba del gráfico de velas puedes activar y desactivar distintos indicadores.
@@ -199,7 +216,7 @@ export default function Ayuda() {
             <Indicador
               nombre="RSI — Índice de fuerza relativa (14)"
               mide="Qué tan rápido y qué tanto subió o bajó el precio recientemente, en una escala de 0 a 100."
-              cuando="Arriba de 70 se considera &quot;sobrecompra&quot;, abajo de 30 se considera &quot;sobreventa&quot; (los mismos términos que ves en las tarjetas de Mi lista)."
+              cuando="Arriba de 70 se considera &quot;sobrecompra&quot;, abajo de 30 se considera &quot;sobreventa&quot; (los mismos términos que ves en las filas de Mi lista)."
             />
             <Indicador
               nombre="MACD (12, 26, 9)"
