@@ -38,8 +38,34 @@ type FiboDibujado = {
   priceLines: IPriceLine[];
 };
 
+type RectanguloDibujado = {
+  localId: number;
+  a: PuntoDibujo;
+  b: PuntoDibujo;
+};
+
+type CanalDibujado = {
+  localId: number;
+  a: PuntoDibujo;
+  b: PuntoDibujo;
+  offset: number;
+  lineSeries1: ISeriesApi<"Line">;
+  lineSeries2: ISeriesApi<"Line">;
+};
+
 type MomentoTipo = "ninguno" | "rsi" | "macd" | "kdj" | "wr";
-type Herramienta = "cursor" | "sr" | "tendencia" | "fibo";
+type Herramienta = "cursor" | "sr" | "tendencia" | "fibo" | "rectangulo" | "canal";
+
+// Cuántos clics necesita cada herramienta para terminar de dibujarse
+// ("sr" se maneja aparte porque no necesita un tiempo/vela, solo un precio).
+const PUNTOS_NECESARIOS: Record<Herramienta, number> = {
+  cursor: 0,
+  sr: 0,
+  tendencia: 2,
+  fibo: 2,
+  rectangulo: 2,
+  canal: 3,
+};
 
 const VERDE = "#0ecb81";
 const ROJO = "#f6465d";
@@ -65,6 +91,51 @@ function urlBase64ToUint8Array(base64String: string) {
     outputArray[i] = rawData.charCodeAt(i);
   }
   return outputArray;
+}
+
+// Interpola el precio de una línea recta (a→b) en un tiempo intermedio
+// cualquiera. Se usa para el canal paralelo: el tercer clic define qué tan
+// separada está la línea paralela de la línea base en ese mismo instante.
+function interpolarPrecio(a: PuntoDibujo, b: PuntoDibujo, time: number): number {
+  if (b.time === a.time) return a.price;
+  const t = (time - a.time) / (b.time - a.time);
+  return a.price + (b.price - a.price) * t;
+}
+
+// Modo imán: en vez de usar el precio exacto del píxel donde se hizo clic,
+// usa el open/high/low/close real de la vela más cercana — así las líneas
+// quedan pegadas a los niveles que de verdad tocó el precio.
+function precioImantado(candles: Candle[], time: number, precioBruto: number): number {
+  if (candles.length === 0) return precioBruto;
+  let masCercana = candles[0];
+  let mejorDelta = Math.abs(candles[0].time - time);
+  for (const c of candles) {
+    const delta = Math.abs(c.time - time);
+    if (delta < mejorDelta) {
+      mejorDelta = delta;
+      masCercana = c;
+    }
+  }
+  const candidatos = [masCercana.open, masCercana.high, masCercana.low, masCercana.close];
+  return candidatos.reduce((mejor, v) => (Math.abs(v - precioBruto) < Math.abs(mejor - precioBruto) ? v : mejor));
+}
+
+function mensajeParaPaso(herramienta: Herramienta, pasoActual: number): string {
+  if (herramienta === "tendencia") {
+    return pasoActual === 0 ? "Haz clic en el punto inicial de la línea" : "Ahora haz clic en el segundo punto";
+  }
+  if (herramienta === "fibo") {
+    return pasoActual === 0 ? "Haz clic en el primer punto (máximo o mínimo)" : "Ahora haz clic en el segundo punto";
+  }
+  if (herramienta === "rectangulo") {
+    return pasoActual === 0 ? "Haz clic en una esquina del rectángulo" : "Ahora haz clic en la esquina opuesta";
+  }
+  if (herramienta === "canal") {
+    if (pasoActual === 0) return "Haz clic en el punto inicial del canal";
+    if (pasoActual === 1) return "Ahora haz clic en el punto final de la línea";
+    return "Ahora haz clic para definir el ancho del canal";
+  }
+  return "";
 }
 
 // --- Iconos (inline, sin dependencias) ---
@@ -99,6 +170,64 @@ function IconFibo() {
       <path d="M2 6.5H11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
       <path d="M2 10H8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
       <path d="M2 13H13" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+function IconRectangulo() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <rect x="2.5" y="4" width="11" height="8" rx="1" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  );
+}
+function IconCanal() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <path d="M2 11L14 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M2 14L14 7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  );
+}
+function IconIman({ activo }: { activo: boolean }) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <path
+        d="M4 2.5v5.5a4 4 0 008 0V2.5"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        fill={activo ? "currentColor" : "none"}
+        fillOpacity={activo ? 0.15 : 0}
+      />
+      <path d="M4 2.5H6.3V6H4z" fill="currentColor" />
+      <path d="M9.7 2.5H12V6H9.7z" fill="currentColor" />
+    </svg>
+  );
+}
+function IconOjo({ abierto }: { abierto: boolean }) {
+  if (!abierto) {
+    return (
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+        <path
+          d="M2 8s2.2-4 6-4 6 4 6 4-2.2 4-6 4-6-4-6-4z"
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinejoin="round"
+        />
+        <circle cx="8" cy="8" r="1.7" fill="currentColor" />
+        <path d="M2.5 2.5L13.5 13.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <path
+        d="M2 8s2.2-4 6-4 6 4 6 4-2.2 4-6 4-6-4-6-4z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <circle cx="8" cy="8" r="1.7" fill="currentColor" />
     </svg>
   );
 }
@@ -196,21 +325,30 @@ export default function CandleChart({
   sufijo?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const rectDivsRef = useRef<Map<number, HTMLDivElement>>(new Map());
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const herramientaRef = useRef<Herramienta>("cursor");
+  const imanActivoRef = useRef(false);
+  const candlesRef = useRef<Candle[]>(candles);
   const nextLocalId = useRef(1);
   const lineasRef = useRef<LineaMarcada[]>([]);
   const tendenciasRef = useRef<TendenciaDibujada[]>([]);
   const fibosRef = useRef<FiboDibujado[]>([]);
-  const primerPuntoRef = useRef<PuntoDibujo | null>(null);
+  const canalesRef = useRef<CanalDibujado[]>([]);
+  const puntosPendientesRef = useRef<PuntoDibujo[]>([]);
   const prevCandlesRef = useRef<Candle[] | null>(null);
   const indicadoresRef = useRef<HTMLDivElement>(null);
 
   const [herramienta, setHerramienta] = useState<Herramienta>("cursor");
+  const [imanActivo, setImanActivo] = useState(false);
+  const [dibujosVisibles, setDibujosVisibles] = useState(true);
   const [lineas, setLineas] = useState<LineaMarcada[]>([]);
   const [tendencias, setTendencias] = useState<TendenciaDibujada[]>([]);
   const [fibos, setFibos] = useState<FiboDibujado[]>([]);
+  const [rectangulos, setRectangulos] = useState<RectanguloDibujado[]>([]);
+  const [canales, setCanales] = useState<CanalDibujado[]>([]);
   const [instruccion, setInstruccion] = useState<string | null>(null);
   const [avisoMensaje, setAvisoMensaje] = useState<string | null>(null);
   const [indicadoresAbiertos, setIndicadoresAbiertos] = useState(false);
@@ -241,16 +379,23 @@ export default function CandleChart({
   }, [fibos]);
 
   useEffect(() => {
+    canalesRef.current = canales;
+  }, [canales]);
+
+  useEffect(() => {
+    candlesRef.current = candles;
+  }, [candles]);
+
+  useEffect(() => {
     herramientaRef.current = herramienta;
-    primerPuntoRef.current = null;
-    if (herramienta === "tendencia") {
-      setInstruccion("Haz clic en el punto inicial de la línea");
-    } else if (herramienta === "fibo") {
-      setInstruccion("Haz clic en el primer punto (máximo o mínimo)");
-    } else {
-      setInstruccion(null);
-    }
+    puntosPendientesRef.current = [];
+    const necesarios = PUNTOS_NECESARIOS[herramienta];
+    setInstruccion(necesarios > 0 ? mensajeParaPaso(herramienta, 0) : null);
   }, [herramienta]);
+
+  useEffect(() => {
+    imanActivoRef.current = imanActivo;
+  }, [imanActivo]);
 
   // Cerrar el panel de indicadores al hacer clic fuera de él
   useEffect(() => {
@@ -506,12 +651,15 @@ export default function CandleChart({
 
     // Si cambiamos de activo/temporalidad, todo lo dibujado a mano ya no
     // aplica (es de otro gráfico). Si solo se prendió/apagó un indicador,
-    // volvemos a dibujar líneas S/R, tendencias y Fibonacci que el usuario
-    // ya tenía marcadas.
+    // volvemos a dibujar S/R, tendencias, Fibonacci y canales que el
+    // usuario ya tenía marcados (los rectángulos son overlays aparte y no
+    // necesitan recrearse: solo vuelven a ubicarse en pantalla solos).
     if (esCambioDeActivo) {
       setLineas([]);
       setTendencias([]);
       setFibos([]);
+      setRectangulos([]);
+      setCanales([]);
     } else {
       lineasRef.current.forEach((linea) => {
         linea.priceLine = series.createPriceLine({
@@ -520,6 +668,7 @@ export default function CandleChart({
           lineWidth: 2,
           lineStyle: LineStyle.Dashed,
           axisLabelVisible: true,
+          lineVisible: dibujosVisibles,
           title: linea.alertId ? "🔔 S/R" : "S/R",
         });
       });
@@ -530,6 +679,7 @@ export default function CandleChart({
           lineWidth: 2,
           priceLineVisible: false,
           lastValueVisible: false,
+          visible: dibujosVisibles,
         });
         const [p1, p2] = t.a.time <= t.b.time ? [t.a, t.b] : [t.b, t.a];
         lineSeries.setData([
@@ -540,24 +690,34 @@ export default function CandleChart({
       });
 
       fibosRef.current.forEach((f) => {
-        f.priceLines = dibujarNivelesFibo(series, f.a, f.b);
+        f.priceLines = dibujarNivelesFibo(series, f.a, f.b, dibujosVisibles);
+      });
+
+      canalesRef.current.forEach((c) => {
+        const [ln1, ln2] = crearLineasCanal(chart, c.a, c.b, c.offset, dibujosVisibles);
+        c.lineSeries1 = ln1;
+        c.lineSeries2 = ln2;
       });
     }
 
     // Al hacer clic en el gráfico según la herramienta activa: marcar un
-    // soporte/resistencia (una vela), o ir tomando el primer y segundo
-    // punto para una línea de tendencia o un retroceso de Fibonacci.
+    // soporte/resistencia (una vela), o ir tomando los puntos que necesite
+    // la herramienta (2 para tendencia/fibo/rectángulo, 3 para canal).
     const handleClick = (param: MouseEventParams) => {
       const herramientaActiva = herramientaRef.current;
       if (herramientaActiva === "cursor") return;
       if (!param.point || !seriesRef.current) return;
 
-      const price = seriesRef.current.coordinateToPrice(param.point.y);
+      let price: number | null = seriesRef.current.coordinateToPrice(param.point.y);
       if (price === null) return;
 
       if (herramientaActiva === "sr") {
+        const precioFinal: number =
+          imanActivoRef.current && param.time !== undefined
+            ? precioImantado(candlesRef.current, param.time as number, price)
+            : price;
         const priceLine = seriesRef.current.createPriceLine({
-          price,
+          price: precioFinal,
           color: "#f0b90b",
           lineWidth: 2,
           lineStyle: LineStyle.Dashed,
@@ -566,34 +726,40 @@ export default function CandleChart({
         });
         setLineas((prev) => [
           ...prev,
-          { localId: nextLocalId.current++, price, priceLine, alertId: null, guardando: false },
+          { localId: nextLocalId.current++, price: precioFinal, priceLine, alertId: null, guardando: false },
         ]);
         return;
       }
 
-      // Tendencia y Fibonacci necesitan dos puntos, cada uno anclado a una
-      // vela concreta (tiempo), no solo a una posición en pantalla.
+      // El resto de herramientas necesitan anclarse a una vela concreta
+      // (tiempo), no solo a una posición en pantalla.
       const time = param.time as number | undefined;
       if (time === undefined) return;
 
-      const primero = primerPuntoRef.current;
-      if (!primero) {
-        primerPuntoRef.current = { time, price };
-        setInstruccion("Ahora haz clic en el segundo punto");
+      if (imanActivoRef.current) {
+        price = precioImantado(candlesRef.current, time, price);
+      }
+
+      const necesarios = PUNTOS_NECESARIOS[herramientaActiva];
+
+      if (necesarios > 1 && puntosPendientesRef.current.some((p) => p.time === time)) {
+        setInstruccion("Elige un punto en otra vela");
         return;
       }
 
-      if (primero.time === time) {
-        // Mismo punto/vela: pedimos elegir otra vela distinta.
-        setInstruccion("Elige un punto en otra vela para el segundo clic");
+      puntosPendientesRef.current = [...puntosPendientesRef.current, { time, price }];
+
+      if (puntosPendientesRef.current.length < necesarios) {
+        setInstruccion(mensajeParaPaso(herramientaActiva, puntosPendientesRef.current.length));
         return;
       }
 
-      const segundo: PuntoDibujo = { time, price };
-      primerPuntoRef.current = null;
+      const puntos = puntosPendientesRef.current;
+      puntosPendientesRef.current = [];
 
       if (herramientaActiva === "tendencia") {
-        const [p1, p2] = primero.time <= segundo.time ? [primero, segundo] : [segundo, primero];
+        const [a, b] = puntos;
+        const [p1, p2] = a.time <= b.time ? [a, b] : [b, a];
         const lineSeries = chart.addLineSeries({
           color: "#3b82f6",
           lineWidth: 2,
@@ -604,19 +770,25 @@ export default function CandleChart({
           { time: p1.time as UTCTimestamp, value: p1.price },
           { time: p2.time as UTCTimestamp, value: p2.price },
         ]);
-        setTendencias((prev) => [
-          ...prev,
-          { localId: nextLocalId.current++, a: primero, b: segundo, lineSeries },
-        ]);
-        setInstruccion("Haz clic en el punto inicial de la línea");
+        setTendencias((prev) => [...prev, { localId: nextLocalId.current++, a, b, lineSeries }]);
       } else if (herramientaActiva === "fibo") {
-        const priceLines = dibujarNivelesFibo(series, primero, segundo);
-        setFibos((prev) => [
+        const [a, b] = puntos;
+        const priceLines = dibujarNivelesFibo(series, a, b, true);
+        setFibos((prev) => [...prev, { localId: nextLocalId.current++, a, b, priceLines }]);
+      } else if (herramientaActiva === "rectangulo") {
+        const [a, b] = puntos;
+        setRectangulos((prev) => [...prev, { localId: nextLocalId.current++, a, b }]);
+      } else if (herramientaActiva === "canal") {
+        const [a, b, c] = puntos;
+        const offset = c.price - interpolarPrecio(a, b, c.time);
+        const [lineSeries1, lineSeries2] = crearLineasCanal(chart, a, b, offset, true);
+        setCanales((prev) => [
           ...prev,
-          { localId: nextLocalId.current++, a: primero, b: segundo, priceLines },
+          { localId: nextLocalId.current++, a, b, offset, lineSeries1, lineSeries2 },
         ]);
-        setInstruccion("Haz clic en el primer punto (máximo o mínimo)");
       }
+
+      setInstruccion(mensajeParaPaso(herramientaActiva, 0));
     };
 
     chart.subscribeClick(handleClick);
@@ -651,6 +823,62 @@ export default function CandleChart({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candles, maOn, emaOn, bollOn, volumeOn, momentoTipo]);
+
+  // Mantiene los rectángulos (overlays en HTML, no forman parte del
+  // gráfico) pegados a su posición real en precio/tiempo aunque el usuario
+  // haga zoom, se desplace o cambie el tamaño de la ventana. Como
+  // lightweight-charts no avisa de cada repintado, lo recalculamos en un
+  // bucle liviano mientras haya al menos un rectángulo dibujado.
+  useEffect(() => {
+    if (rectangulos.length === 0) return;
+
+    let activo = true;
+    const actualizar = () => {
+      if (!activo) return;
+      const chart = chartRef.current;
+      const series = seriesRef.current;
+      if (chart && series) {
+        rectangulos.forEach((r) => {
+          const div = rectDivsRef.current.get(r.localId);
+          if (!div) return;
+          const x1 = chart.timeScale().timeToCoordinate(r.a.time as UTCTimestamp);
+          const x2 = chart.timeScale().timeToCoordinate(r.b.time as UTCTimestamp);
+          const y1 = series.priceToCoordinate(r.a.price);
+          const y2 = series.priceToCoordinate(r.b.price);
+          if (x1 === null || x2 === null || y1 === null || y2 === null) {
+            div.style.display = "none";
+            return;
+          }
+          div.style.display = dibujosVisibles ? "block" : "none";
+          div.style.left = `${Math.min(x1, x2)}px`;
+          div.style.top = `${Math.min(y1, y2)}px`;
+          div.style.width = `${Math.abs(x2 - x1)}px`;
+          div.style.height = `${Math.abs(y2 - y1)}px`;
+        });
+      }
+      requestAnimationFrame(actualizar);
+    };
+    const frame = requestAnimationFrame(actualizar);
+    return () => {
+      activo = false;
+      cancelAnimationFrame(frame);
+    };
+  }, [rectangulos, dibujosVisibles]);
+
+  // Mostrar/ocultar todo lo dibujado (sin borrarlo): en price lines (S/R,
+  // Fibonacci) apagamos lineVisible/axisLabelVisible; en series nativas
+  // (tendencia, canal) usamos su propio "visible"; los rectángulos ya
+  // atienden a dibujosVisibles en el efecto de arriba.
+  useEffect(() => {
+    lineas.forEach((l) => l.priceLine.applyOptions({ lineVisible: dibujosVisibles, axisLabelVisible: dibujosVisibles }));
+    fibos.forEach((f) => f.priceLines.forEach((pl) => pl.applyOptions({ lineVisible: dibujosVisibles, axisLabelVisible: dibujosVisibles })));
+    tendencias.forEach((t) => t.lineSeries.applyOptions({ visible: dibujosVisibles }));
+    canales.forEach((c) => {
+      c.lineSeries1.applyOptions({ visible: dibujosVisibles });
+      c.lineSeries2.applyOptions({ visible: dibujosVisibles });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dibujosVisibles]);
 
   // Cargar avisos ya guardados de este activo (para que sigan ahí cuando el
   // usuario vuelve a entrar). Corre después de construir el gráfico de arriba.
@@ -714,10 +942,23 @@ export default function CandleChart({
     setFibos((prev) => prev.filter((x) => x.localId !== f.localId));
   }, []);
 
+  const borrarRectangulo = useCallback((r: RectanguloDibujado) => {
+    rectDivsRef.current.delete(r.localId);
+    setRectangulos((prev) => prev.filter((x) => x.localId !== r.localId));
+  }, []);
+
+  const borrarCanal = useCallback((c: CanalDibujado) => {
+    chartRef.current?.removeSeries(c.lineSeries1);
+    chartRef.current?.removeSeries(c.lineSeries2);
+    setCanales((prev) => prev.filter((x) => x.localId !== c.localId));
+  }, []);
+
   const borrarTodo = () => {
     lineas.forEach((l) => borrarLinea(l));
     tendencias.forEach((t) => borrarTendencia(t));
     fibos.forEach((f) => borrarFibo(f));
+    rectangulos.forEach((r) => borrarRectangulo(r));
+    canales.forEach((c) => borrarCanal(c));
   };
 
   // Activa el aviso push para una línea: pide permiso de notificaciones,
@@ -806,7 +1047,7 @@ export default function CandleChart({
   const cambio = legendCandle ? legendCandle.close - legendCandle.open : 0;
   const cambioPct = legendCandle && legendCandle.open !== 0 ? (cambio / legendCandle.open) * 100 : 0;
   const subiendo = cambio >= 0;
-  const totalDibujado = lineas.length + tendencias.length + fibos.length;
+  const totalDibujado = lineas.length + tendencias.length + fibos.length + rectangulos.length + canales.length;
 
   return (
     <div className="relative w-full h-full flex">
@@ -835,6 +1076,36 @@ export default function CandleChart({
           title="Retroceso de Fibonacci (2 clics: máximo y mínimo)"
         >
           <IconFibo />
+        </RailBtn>
+        <RailBtn
+          activo={herramienta === "rectangulo"}
+          onClick={() => setHerramienta((h) => (h === "rectangulo" ? "cursor" : "rectangulo"))}
+          title="Rectángulo (2 clics: esquinas opuestas)"
+        >
+          <IconRectangulo />
+        </RailBtn>
+        <RailBtn
+          activo={herramienta === "canal"}
+          onClick={() => setHerramienta((h) => (h === "canal" ? "cursor" : "canal"))}
+          title="Canal paralelo (3 clics)"
+        >
+          <IconCanal />
+        </RailBtn>
+
+        <div className="w-5 border-t border-white/10 my-0.5" />
+
+        <RailBtn
+          activo={imanActivo}
+          onClick={() => setImanActivo((v) => !v)}
+          title={imanActivo ? "Imán activado: se ajusta al O/H/L/C real" : "Activar imán (ajustar al precio real de la vela)"}
+        >
+          <IconIman activo={imanActivo} />
+        </RailBtn>
+        <RailBtn
+          onClick={() => setDibujosVisibles((v) => !v)}
+          title={dibujosVisibles ? "Ocultar todo lo dibujado" : "Mostrar todo lo dibujado"}
+        >
+          <IconOjo abierto={dibujosVisibles} />
         </RailBtn>
 
         <div className="relative" ref={indicadoresRef}>
@@ -928,7 +1199,7 @@ export default function CandleChart({
           </div>
         )}
 
-        {(lineas.length > 0 || tendencias.length > 0 || fibos.length > 0) && (
+        {(lineas.length > 0 || tendencias.length > 0 || fibos.length > 0 || rectangulos.length > 0 || canales.length > 0) && (
           <div className="absolute top-1 right-2 z-10 bg-[#111113]/95 border border-white/10 rounded-lg p-2 flex flex-col gap-1.5 max-w-[220px]">
             {lineas.map((linea) => (
               <div key={`sr-${linea.localId}`} className="flex items-center justify-between gap-2 text-xs">
@@ -981,6 +1252,28 @@ export default function CandleChart({
                 </button>
               </div>
             ))}
+            {rectangulos.map((r) => (
+              <div key={`rect-${r.localId}`} className="flex items-center justify-between gap-2 text-xs">
+                <span className="text-amber-400">🟦 Rectángulo</span>
+                <button
+                  onClick={() => borrarRectangulo(r)}
+                  className="text-neutral-600 hover:text-[#f6465d] transition px-1"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            {canales.map((c) => (
+              <div key={`canal-${c.localId}`} className="flex items-center justify-between gap-2 text-xs">
+                <span className="text-cyan-400">📐 Canal paralelo</span>
+                <button
+                  onClick={() => borrarCanal(c)}
+                  className="text-neutral-600 hover:text-[#f6465d] transition px-1"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
           </div>
         )}
 
@@ -990,7 +1283,24 @@ export default function CandleChart({
           </div>
         )}
 
-        <div ref={containerRef} className="w-full h-full" />
+        <div ref={containerRef} className="absolute inset-0" />
+
+        {/* Overlay de rectángulos: viven fuera del contenedor del gráfico
+            (que se vacía y reconstruye con innerHTML="") para no perderse
+            cada vez que se prende/apaga un indicador. */}
+        <div ref={overlayRef} className="absolute inset-0 pointer-events-none">
+          {rectangulos.map((r) => (
+            <div
+              key={r.localId}
+              ref={(el) => {
+                if (el) rectDivsRef.current.set(r.localId, el);
+                else rectDivsRef.current.delete(r.localId);
+              }}
+              className="absolute border-2 border-amber-400/70 bg-amber-400/10"
+              style={{ display: "none" }}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -1003,7 +1313,8 @@ export default function CandleChart({
 function dibujarNivelesFibo(
   series: ISeriesApi<"Candlestick">,
   a: PuntoDibujo,
-  b: PuntoDibujo
+  b: PuntoDibujo,
+  visible: boolean
 ): IPriceLine[] {
   const alto = Math.max(a.price, b.price);
   const bajo = Math.min(a.price, b.price);
@@ -1016,8 +1327,48 @@ function dibujarNivelesFibo(
       color,
       lineWidth: 1,
       lineStyle: LineStyle.Dashed,
-      axisLabelVisible: true,
+      axisLabelVisible: visible,
+      lineVisible: visible,
       title: `Fib ${(nivel * 100).toFixed(1)}%`,
     });
   });
+}
+
+// Crea las dos líneas (base + paralela) de un canal, dado un desplazamiento
+// de precio constante entre ambas.
+function crearLineasCanal(
+  chart: IChartApi,
+  a: PuntoDibujo,
+  b: PuntoDibujo,
+  offset: number,
+  visible: boolean
+): [ISeriesApi<"Line">, ISeriesApi<"Line">] {
+  const [p1, p2] = a.time <= b.time ? [a, b] : [b, a];
+
+  const linea1 = chart.addLineSeries({
+    color: "#22d3ee",
+    lineWidth: 2,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    visible,
+  });
+  linea1.setData([
+    { time: p1.time as UTCTimestamp, value: p1.price },
+    { time: p2.time as UTCTimestamp, value: p2.price },
+  ]);
+
+  const linea2 = chart.addLineSeries({
+    color: "#22d3ee",
+    lineWidth: 2,
+    lineStyle: LineStyle.Dashed,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    visible,
+  });
+  linea2.setData([
+    { time: p1.time as UTCTimestamp, value: p1.price + offset },
+    { time: p2.time as UTCTimestamp, value: p2.price + offset },
+  ]);
+
+  return [linea1, linea2];
 }
