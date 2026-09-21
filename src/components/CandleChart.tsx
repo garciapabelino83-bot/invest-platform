@@ -22,10 +22,39 @@ type LineaMarcada = {
   guardando: boolean;
 };
 
+type PuntoDibujo = { time: number; price: number };
+
+type TendenciaDibujada = {
+  localId: number;
+  a: PuntoDibujo;
+  b: PuntoDibujo;
+  lineSeries: ISeriesApi<"Line">;
+};
+
+type FiboDibujado = {
+  localId: number;
+  a: PuntoDibujo;
+  b: PuntoDibujo;
+  priceLines: IPriceLine[];
+};
+
 type MomentoTipo = "ninguno" | "rsi" | "macd" | "kdj" | "wr";
+type Herramienta = "cursor" | "sr" | "tendencia" | "fibo";
 
 const VERDE = "#0ecb81";
 const ROJO = "#f6465d";
+
+// Niveles estándar de retroceso de Fibonacci y un color por nivel (mismo
+// criterio visual que usan la mayoría de plataformas de trading).
+const NIVELES_FIBO: { nivel: number; color: string }[] = [
+  { nivel: 0, color: "#787b86" },
+  { nivel: 0.236, color: "#f6465d" },
+  { nivel: 0.382, color: "#f0b90b" },
+  { nivel: 0.5, color: "#a855f7" },
+  { nivel: 0.618, color: "#22d3ee" },
+  { nivel: 0.786, color: "#0ecb81" },
+  { nivel: 1, color: "#787b86" },
+];
 
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -52,6 +81,24 @@ function IconLine() {
       <circle cx="3.5" cy="12.5" r="1.6" fill="currentColor" />
       <circle cx="12.5" cy="3.5" r="1.6" fill="currentColor" />
       <path d="M4.7 11.3L11.3 4.7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+function IconTendencia() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <path d="M2 12.5L6 8.5L9 10.5L14 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M10.5 3.5H14V7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+function IconFibo() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <path d="M2 3H14" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      <path d="M2 6.5H11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      <path d="M2 10H8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      <path d="M2 13H13" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
     </svg>
   );
 }
@@ -151,14 +198,20 @@ export default function CandleChart({
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const drawModeRef = useRef(false);
+  const herramientaRef = useRef<Herramienta>("cursor");
   const nextLocalId = useRef(1);
   const lineasRef = useRef<LineaMarcada[]>([]);
+  const tendenciasRef = useRef<TendenciaDibujada[]>([]);
+  const fibosRef = useRef<FiboDibujado[]>([]);
+  const primerPuntoRef = useRef<PuntoDibujo | null>(null);
   const prevCandlesRef = useRef<Candle[] | null>(null);
   const indicadoresRef = useRef<HTMLDivElement>(null);
 
-  const [drawMode, setDrawMode] = useState(false);
+  const [herramienta, setHerramienta] = useState<Herramienta>("cursor");
   const [lineas, setLineas] = useState<LineaMarcada[]>([]);
+  const [tendencias, setTendencias] = useState<TendenciaDibujada[]>([]);
+  const [fibos, setFibos] = useState<FiboDibujado[]>([]);
+  const [instruccion, setInstruccion] = useState<string | null>(null);
   const [avisoMensaje, setAvisoMensaje] = useState<string | null>(null);
   const [indicadoresAbiertos, setIndicadoresAbiertos] = useState(false);
 
@@ -180,8 +233,24 @@ export default function CandleChart({
   }, [lineas]);
 
   useEffect(() => {
-    drawModeRef.current = drawMode;
-  }, [drawMode]);
+    tendenciasRef.current = tendencias;
+  }, [tendencias]);
+
+  useEffect(() => {
+    fibosRef.current = fibos;
+  }, [fibos]);
+
+  useEffect(() => {
+    herramientaRef.current = herramienta;
+    primerPuntoRef.current = null;
+    if (herramienta === "tendencia") {
+      setInstruccion("Haz clic en el punto inicial de la línea");
+    } else if (herramienta === "fibo") {
+      setInstruccion("Haz clic en el primer punto (máximo o mínimo)");
+    } else {
+      setInstruccion(null);
+    }
+  }, [herramienta]);
 
   // Cerrar el panel de indicadores al hacer clic fuera de él
   useEffect(() => {
@@ -435,11 +504,14 @@ export default function CandleChart({
     chartRef.current = chart;
     seriesRef.current = series;
 
-    // Si cambiamos de activo/temporalidad, las líneas marcadas ya no aplican
-    // (son de otro gráfico). Si solo se prendió/apagó un indicador, volvemos
-    // a dibujar las líneas que el usuario ya tenía marcadas.
+    // Si cambiamos de activo/temporalidad, todo lo dibujado a mano ya no
+    // aplica (es de otro gráfico). Si solo se prendió/apagó un indicador,
+    // volvemos a dibujar líneas S/R, tendencias y Fibonacci que el usuario
+    // ya tenía marcadas.
     if (esCambioDeActivo) {
       setLineas([]);
+      setTendencias([]);
+      setFibos([]);
     } else {
       lineasRef.current.forEach((linea) => {
         linea.priceLine = series.createPriceLine({
@@ -451,30 +523,100 @@ export default function CandleChart({
           title: linea.alertId ? "🔔 S/R" : "S/R",
         });
       });
+
+      tendenciasRef.current.forEach((t) => {
+        const lineSeries = chart.addLineSeries({
+          color: "#3b82f6",
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: false,
+        });
+        const [p1, p2] = t.a.time <= t.b.time ? [t.a, t.b] : [t.b, t.a];
+        lineSeries.setData([
+          { time: p1.time as UTCTimestamp, value: p1.price },
+          { time: p2.time as UTCTimestamp, value: p2.price },
+        ]);
+        t.lineSeries = lineSeries;
+      });
+
+      fibosRef.current.forEach((f) => {
+        f.priceLines = dibujarNivelesFibo(series, f.a, f.b);
+      });
     }
 
-    // Al hacer clic en el gráfico (con el modo "marcar" activado), dibujamos
-    // una línea horizontal de soporte/resistencia en el precio donde se hizo clic.
+    // Al hacer clic en el gráfico según la herramienta activa: marcar un
+    // soporte/resistencia (una vela), o ir tomando el primer y segundo
+    // punto para una línea de tendencia o un retroceso de Fibonacci.
     const handleClick = (param: MouseEventParams) => {
-      if (!drawModeRef.current) return;
+      const herramientaActiva = herramientaRef.current;
+      if (herramientaActiva === "cursor") return;
       if (!param.point || !seriesRef.current) return;
 
       const price = seriesRef.current.coordinateToPrice(param.point.y);
       if (price === null) return;
 
-      const priceLine = seriesRef.current.createPriceLine({
-        price,
-        color: "#f0b90b",
-        lineWidth: 2,
-        lineStyle: LineStyle.Dashed,
-        axisLabelVisible: true,
-        title: "S/R",
-      });
+      if (herramientaActiva === "sr") {
+        const priceLine = seriesRef.current.createPriceLine({
+          price,
+          color: "#f0b90b",
+          lineWidth: 2,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: "S/R",
+        });
+        setLineas((prev) => [
+          ...prev,
+          { localId: nextLocalId.current++, price, priceLine, alertId: null, guardando: false },
+        ]);
+        return;
+      }
 
-      setLineas((prev) => [
-        ...prev,
-        { localId: nextLocalId.current++, price, priceLine, alertId: null, guardando: false },
-      ]);
+      // Tendencia y Fibonacci necesitan dos puntos, cada uno anclado a una
+      // vela concreta (tiempo), no solo a una posición en pantalla.
+      const time = param.time as number | undefined;
+      if (time === undefined) return;
+
+      const primero = primerPuntoRef.current;
+      if (!primero) {
+        primerPuntoRef.current = { time, price };
+        setInstruccion("Ahora haz clic en el segundo punto");
+        return;
+      }
+
+      if (primero.time === time) {
+        // Mismo punto/vela: pedimos elegir otra vela distinta.
+        setInstruccion("Elige un punto en otra vela para el segundo clic");
+        return;
+      }
+
+      const segundo: PuntoDibujo = { time, price };
+      primerPuntoRef.current = null;
+
+      if (herramientaActiva === "tendencia") {
+        const [p1, p2] = primero.time <= segundo.time ? [primero, segundo] : [segundo, primero];
+        const lineSeries = chart.addLineSeries({
+          color: "#3b82f6",
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: false,
+        });
+        lineSeries.setData([
+          { time: p1.time as UTCTimestamp, value: p1.price },
+          { time: p2.time as UTCTimestamp, value: p2.price },
+        ]);
+        setTendencias((prev) => [
+          ...prev,
+          { localId: nextLocalId.current++, a: primero, b: segundo, lineSeries },
+        ]);
+        setInstruccion("Haz clic en el punto inicial de la línea");
+      } else if (herramientaActiva === "fibo") {
+        const priceLines = dibujarNivelesFibo(series, primero, segundo);
+        setFibos((prev) => [
+          ...prev,
+          { localId: nextLocalId.current++, a: primero, b: segundo, priceLines },
+        ]);
+        setInstruccion("Haz clic en el primer punto (máximo o mínimo)");
+      }
     };
 
     chart.subscribeClick(handleClick);
@@ -562,8 +704,20 @@ export default function CandleChart({
     }
   }, []);
 
-  const borrarTodasLasLineas = () => {
+  const borrarTendencia = useCallback((t: TendenciaDibujada) => {
+    chartRef.current?.removeSeries(t.lineSeries);
+    setTendencias((prev) => prev.filter((x) => x.localId !== t.localId));
+  }, []);
+
+  const borrarFibo = useCallback((f: FiboDibujado) => {
+    f.priceLines.forEach((pl) => seriesRef.current?.removePriceLine(pl));
+    setFibos((prev) => prev.filter((x) => x.localId !== f.localId));
+  }, []);
+
+  const borrarTodo = () => {
     lineas.forEach((l) => borrarLinea(l));
+    tendencias.forEach((t) => borrarTendencia(t));
+    fibos.forEach((f) => borrarFibo(f));
   };
 
   // Activa el aviso push para una línea: pide permiso de notificaciones,
@@ -652,16 +806,35 @@ export default function CandleChart({
   const cambio = legendCandle ? legendCandle.close - legendCandle.open : 0;
   const cambioPct = legendCandle && legendCandle.open !== 0 ? (cambio / legendCandle.open) * 100 : 0;
   const subiendo = cambio >= 0;
+  const totalDibujado = lineas.length + tendencias.length + fibos.length;
 
   return (
     <div className="relative w-full h-full flex">
       {/* --- Riel vertical de herramientas (estilo exchange) --- */}
       <div className="flex flex-col items-center gap-1 pr-2 pt-1 border-r border-white/10 mr-2">
-        <RailBtn activo={!drawMode} onClick={() => setDrawMode(false)} title="Cursor">
+        <RailBtn activo={herramienta === "cursor"} onClick={() => setHerramienta("cursor")} title="Cursor">
           <IconCursor />
         </RailBtn>
-        <RailBtn activo={drawMode} onClick={() => setDrawMode((v) => !v)} title="Marcar soporte/resistencia">
+        <RailBtn
+          activo={herramienta === "sr"}
+          onClick={() => setHerramienta((h) => (h === "sr" ? "cursor" : "sr"))}
+          title="Marcar soporte/resistencia"
+        >
           <IconLine />
+        </RailBtn>
+        <RailBtn
+          activo={herramienta === "tendencia"}
+          onClick={() => setHerramienta((h) => (h === "tendencia" ? "cursor" : "tendencia"))}
+          title="Línea de tendencia (2 clics)"
+        >
+          <IconTendencia />
+        </RailBtn>
+        <RailBtn
+          activo={herramienta === "fibo"}
+          onClick={() => setHerramienta((h) => (h === "fibo" ? "cursor" : "fibo"))}
+          title="Retroceso de Fibonacci (2 clics: máximo y mínimo)"
+        >
+          <IconFibo />
         </RailBtn>
 
         <div className="relative" ref={indicadoresRef}>
@@ -721,8 +894,8 @@ export default function CandleChart({
           )}
         </div>
 
-        {lineas.length > 0 && (
-          <RailBtn onClick={borrarTodasLasLineas} title={`Borrar todas las líneas (${lineas.length})`}>
+        {totalDibujado > 0 && (
+          <RailBtn onClick={borrarTodo} title={`Borrar todo lo dibujado (${totalDibujado})`}>
             <IconTrash />
           </RailBtn>
         )}
@@ -749,10 +922,16 @@ export default function CandleChart({
           )}
         </div>
 
-        {lineas.length > 0 && (
+        {instruccion && (
+          <div className="absolute top-1 left-1/2 -translate-x-1/2 z-10 bg-[#111113]/95 border border-blue-500/40 text-blue-300 text-[11px] rounded-lg px-3 py-1.5 pointer-events-none">
+            {instruccion}
+          </div>
+        )}
+
+        {(lineas.length > 0 || tendencias.length > 0 || fibos.length > 0) && (
           <div className="absolute top-1 right-2 z-10 bg-[#111113]/95 border border-white/10 rounded-lg p-2 flex flex-col gap-1.5 max-w-[220px]">
             {lineas.map((linea) => (
-              <div key={linea.localId} className="flex items-center justify-between gap-2 text-xs">
+              <div key={`sr-${linea.localId}`} className="flex items-center justify-between gap-2 text-xs">
                 <span className="font-mono text-neutral-300">
                   ${linea.price.toLocaleString("es", { maximumFractionDigits: 2 })}
                 </span>
@@ -780,6 +959,28 @@ export default function CandleChart({
                 </div>
               </div>
             ))}
+            {tendencias.map((t) => (
+              <div key={`tend-${t.localId}`} className="flex items-center justify-between gap-2 text-xs">
+                <span className="text-blue-400">📈 Línea de tendencia</span>
+                <button
+                  onClick={() => borrarTendencia(t)}
+                  className="text-neutral-600 hover:text-[#f6465d] transition px-1"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            {fibos.map((f) => (
+              <div key={`fibo-${f.localId}`} className="flex items-center justify-between gap-2 text-xs">
+                <span className="text-purple-400">🌀 Fibonacci</span>
+                <button
+                  onClick={() => borrarFibo(f)}
+                  className="text-neutral-600 hover:text-[#f6465d] transition px-1"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
           </div>
         )}
 
@@ -793,4 +994,30 @@ export default function CandleChart({
       </div>
     </div>
   );
+}
+
+// Dibuja las 7 líneas horizontales de un retroceso de Fibonacci entre dos
+// puntos marcados por el usuario (no importa cuál sea más alto: el nivel
+// 0% siempre queda en el precio más alto y el 100% en el más bajo, que es
+// la convención que usa la mayoría de las plataformas de trading).
+function dibujarNivelesFibo(
+  series: ISeriesApi<"Candlestick">,
+  a: PuntoDibujo,
+  b: PuntoDibujo
+): IPriceLine[] {
+  const alto = Math.max(a.price, b.price);
+  const bajo = Math.min(a.price, b.price);
+  const rango = alto - bajo;
+
+  return NIVELES_FIBO.map(({ nivel, color }) => {
+    const price = alto - rango * nivel;
+    return series.createPriceLine({
+      price,
+      color,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      axisLabelVisible: true,
+      title: `Fib ${(nivel * 100).toFixed(1)}%`,
+    });
+  });
 }
