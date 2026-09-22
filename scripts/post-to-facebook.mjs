@@ -1,3 +1,5 @@
+import { renderAnalysisCard } from "./render-card.mjs";
+
 const PAGE_ID = process.env.FB_PAGE_ID || "1361643533693650";
 const ACCESS_TOKEN = process.env.FB_PAGE_ACCESS_TOKEN;
 const SITE_URL = "https://invest-platform-chi.vercel.app";
@@ -37,18 +39,6 @@ function formatUSD(n) {
   return `$${n.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
 }
 
-function rsiEmoji(signal) {
-  if (signal === "sobrecompra") return "\u{1F534}";
-  if (signal === "sobreventa") return "\u{1F7E2}";
-  return "\u{1F7E1}";
-}
-
-function trendEmoji(trend) {
-  if (trend === "alcista") return "\u{1F4C8}";
-  if (trend === "bajista") return "\u{1F4C9}";
-  return "\u{27A1}\u{FE0F}";
-}
-
 async function fetchAnalysis(coinId) {
   const res = await fetch(`${SITE_URL}/api/analysis?coin=${coinId}`);
   if (!res.ok) {
@@ -57,19 +47,17 @@ async function fetchAnalysis(coinId) {
   return res.json();
 }
 
-function buildMessage(coin, data) {
+function buildCaption(coin, data) {
   const price = formatUSD(data.currentPrice);
   const rsiTxt = data.rsiSignal
-    ? `${rsiEmoji(data.rsiSignal)} RSI ${data.rsi} (${data.rsiSignal})`
+    ? `RSI ${data.rsi} (${data.rsiSignal})`
     : "RSI no disponible por ahora";
-  const trendTxt = data.trend
-    ? `${trendEmoji(data.trend)} Tendencia ${data.trend}`
-    : "Tendencia no disponible por ahora";
+  const trendTxt = data.trend ? `Tendencia ${data.trend}` : "Tendencia no disponible por ahora";
 
   return [
-    `\u{1F4CA} ${coin.name} (${coin.symbol}) - Analisis tecnico`,
+    `${coin.name} (${coin.symbol}) - Analisis tecnico`,
     "",
-    `\u{1F4B0} Precio actual: ${price}`,
+    `Precio actual: ${price}`,
     rsiTxt,
     trendTxt,
     "",
@@ -80,10 +68,14 @@ function buildMessage(coin, data) {
   ].join("\n");
 }
 
-async function postToFacebook(message) {
-  const url = `https://graph.facebook.com/v21.0/${PAGE_ID}/feed`;
-  const params = new URLSearchParams({ message, access_token: ACCESS_TOKEN });
-  const res = await fetch(url, { method: "POST", body: params });
+async function postPhotoToFacebook(imageBuffer, caption) {
+  const url = `https://graph.facebook.com/v21.0/${PAGE_ID}/photos`;
+  const form = new FormData();
+  form.append("caption", caption);
+  form.append("access_token", ACCESS_TOKEN);
+  form.append("source", new Blob([imageBuffer], { type: "image/png" }), "analisis.png");
+
+  const res = await fetch(url, { method: "POST", body: form });
   const data = await res.json();
   if (!res.ok) {
     throw new Error(`Error al publicar en Facebook: ${JSON.stringify(data)}`);
@@ -95,10 +87,14 @@ async function main() {
   const coin = pickCoinOfTheRun();
   console.log(`Publicando analisis de ${coin.name}...`);
   const data = await fetchAnalysis(coin.id);
-  const message = buildMessage(coin, data);
-  console.log("Mensaje a publicar:\n" + message);
-  const result = await postToFacebook(message);
-  console.log("Publicado con exito. Post ID:", result.id);
+  const caption = buildCaption(coin, data);
+  console.log("Descripcion:\n" + caption);
+
+  const imageBuffer = await renderAnalysisCard(coin, data);
+  console.log(`Imagen generada (${imageBuffer.length} bytes)`);
+
+  const result = await postPhotoToFacebook(imageBuffer, caption);
+  console.log("Publicado con exito. Post ID:", result.post_id || result.id);
 }
 
 main().catch((err) => {
