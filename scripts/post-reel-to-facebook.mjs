@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { writeFile, mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { renderReelBackground } from "./render-reel-background.mjs";
+import { renderReelLayers } from "./render-reel-background.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -64,35 +64,101 @@ function buildCaption(coin, data) {
     .join("\n");
 }
 
-// Convierte la imagen de fondo (2160x3840) en un video vertical de ~15s
-// con un zoom lento (efecto Ken Burns) y una pista de audio en silencio,
+// Convierte las dos capas de fondo (sin velas / con velas) en un video
+// vertical de 30s: primero revela el grafico de velas de izquierda a
+// derecha (como si se fuera dibujando y las velas fueran subiendo y
+// bajando), despues aplica un zoom que "respira" (entra y sale
+// suavemente) durante todo el video mas un flash de luz al inicio para
+// llamar la atencion, y por ultimo una pista de audio generada por
+// sintesis (sin usar musica con derechos de autor): un colchon ambiental
+// de fondo suave mas una campanita tipo "alerta de mercado" con
+// envolvente natural (sin distorsion ni recortes agresivos de volumen),
 // cumpliendo los requisitos tecnicos de Reels (mp4, h264, aac, 9:16).
-async function buildReelVideo(pngBuffer, outPath) {
+async function buildReelVideo(layers, outPath) {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "reel-"));
-  const imgPath = path.join(tmpDir, "bg.png");
-  await writeFile(imgPath, pngBuffer);
+  const emptyPath = path.join(tmpDir, "bg-empty.png");
+  const fullPath = path.join(tmpDir, "bg-full.png");
+  await Promise.all([writeFile(emptyPath, layers.empty), writeFile(fullPath, layers.full)]);
 
-  const durationSec = 15;
+  const durationSec = 30;
   const fps = 30;
   const totalFrames = durationSec * fps;
+  const sr = 48000;
+  const midMs = Math.round((durationSec / 2) * 1000);
+  const revealSec = 9;
+  const zoomExpr = "1.05+0.12*(0.5+0.5*sin(2*PI*on/150))";
+
+  // Nota: el zoom ("zoompan") hay que aplicarlo ANTES de mezclar las dos
+  // capas, no despues sobre el video ya compuesto — zoompan esta pensado
+  // para una sola imagen fija en loop, y si se le da un video que ya
+  // cambia con el tiempo (la revelacion de las velas) se queda pegado en
+  // el primer frame. Por eso: primero se le aplica el mismo zoom a cada
+  // capa por separado (quedan sincronizadas porque el zoom depende solo
+  // del numero de frame, no del contenido), y despues se revela la capa
+  // "completa" (con velas) de izquierda a derecha sobre la capa "vacia"
+  // (cuadricula) ya con el zoom aplicado, simulando que el grafico se
+  // dibuja y las velas van subiendo y bajando.
+  const videoFilter =
+    `[0:v]zoompan=z='${zoomExpr}':d=${totalFrames}:s=1080x1920:fps=${fps}[z0];` +
+    `[1:v]zoompan=z='${zoomExpr}':d=${totalFrames}:s=1080x1920:fps=${fps}[z1];` +
+    `[z0]trim=duration=${revealSec},setpts=PTS-STARTPTS[z0t];` +
+    `[z1]trim=duration=${durationSec},setpts=PTS-STARTPTS[z1t];` +
+    `[z0t][z1t]xfade=transition=wiperight:duration=${revealSec}:offset=0[composited];` +
+    `[composited]eq=eval=frame:brightness='if(lt(t,0.3),0.30*(1-t/0.3),0)',format=yuv420p[v]`;
+
+  // Nota: usamos "aevalsrc" (no el filtro "sine") para generar los tonos,
+  // porque "sine" en este ffmpeg sale a un volumen interno muy bajo por
+  // defecto (sin forma de subirlo), lo que hacia que todo el audio
+  // quedara casi inaudible sin importar los multiplicadores de volumen.
+  // Con "aevalsrc" controlamos la amplitud real de cada tono.
+  const tone = (freq, dur) => `aevalsrc=exprs='sin(2*PI*${freq}*t)':s=${sr}:d=${dur}`;
+
+  // "Campana" con varios armonicos (cada uno con su propia caida
+  // exponencial), para que suene a campana institucional/de bolsa de
+  // verdad en vez de un pitido sintetico de un solo tono.
+  const bellExpr = (f) =>
+    `0.55*exp(-3.2*t)*sin(2*PI*${f}*t)+` +
+    `0.30*exp(-5.5*t)*sin(2*PI*${(f * 2.01).toFixed(2)}*t)+` +
+    `0.18*exp(-7.5*t)*sin(2*PI*${(f * 3.0).toFixed(2)}*t)+` +
+    `0.10*exp(-9.5*t)*sin(2*PI*${(f * 4.2).toFixed(2)}*t)`;
+  const bell = (freq, dur) => `aevalsrc=exprs='${bellExpr(freq)}':s=${sr}:d=${dur}`;
+
+  const audioFilters = [
+    // Colchon ambiental de fondo (dos tonos graves en quinta, volumen bajo, con entrada/salida suave)
+    `[2:a]afade=t=in:st=0:d=1,afade=t=out:st=${durationSec - 1.5}:d=1.5,volume=0.05[pad1]`,
+    `[3:a]afade=t=in:st=0:d=1,afade=t=out:st=${durationSec - 1.5}:d=1.5,volume=0.04[pad2]`,
+    // "Ding-dong" institucional al inicio (como una campana de bolsa/oficina)
+    `[4:a]afade=t=out:st=2.4:d=0.1,volume=0.85[bA]`,
+    `[5:a]afade=t=out:st=2.4:d=0.1,adelay=450,volume=0.85[bB]`,
+    // Un segundo toque de campana a mitad del video, para refrescar la atencion sin sobresaltar
+    `[6:a]afade=t=out:st=1.9:d=0.1,adelay=${midMs},volume=0.7[mid]`,
+    `[pad1][pad2][bA][bB][mid]amix=inputs=5:duration=longest:normalize=0[amixed]`,
+    // Solo un limitador suave como red de seguridad (sin compresor ni
+    // normalizador agresivo, que fue lo que distorsionaba el sonido)
+    `[amixed]afade=t=in:st=0:d=0.3,afade=t=out:st=${(durationSec - 0.8).toFixed(1)}:d=0.8,alimiter=limit=0.95,pan=stereo|c0=c0|c1=c0[a]`,
+  ].join(";");
 
   const args = [
     "-y",
     "-loop", "1",
-    "-i", imgPath,
-    "-f", "lavfi",
-    "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
-    "-filter_complex",
-    `[0:v]zoompan=z='min(zoom+0.0012,1.18)':d=${totalFrames}:s=1080x1920:fps=${fps},format=yuv420p[v]`,
+    "-i", emptyPath,
+    "-loop", "1",
+    "-i", fullPath,
+    "-f", "lavfi", "-i", tone(130.81, durationSec),
+    "-f", "lavfi", "-i", tone(196.00, durationSec),
+    "-f", "lavfi", "-i", bell(659.25, 2.5),
+    "-f", "lavfi", "-i", bell(523.25, 2.5),
+    "-f", "lavfi", "-i", bell(587.33, 2.0),
+    "-filter_complex", `${videoFilter};${audioFilters}`,
     "-map", "[v]",
-    "-map", "1:a",
+    "-map", "[a]",
     "-t", String(durationSec),
     "-c:v", "libx264",
     "-profile:v", "high",
     "-g", String(fps * 2),
     "-c:a", "aac",
     "-b:a", "128k",
-    "-ar", "48000",
+    "-ar", String(sr),
     "-shortest",
     outPath,
   ];
@@ -166,11 +232,11 @@ async function main() {
   const caption = buildCaption(coin, data);
   console.log("Descripcion:\n" + caption);
 
-  const bgBuffer = await renderReelBackground(coin, data);
-  console.log(`Fondo generado (${bgBuffer.length} bytes)`);
+  const layers = await renderReelLayers(coin, data);
+  console.log(`Fondo generado (vacio: ${layers.empty.length} bytes, completo: ${layers.full.length} bytes)`);
 
   const outPath = path.join(tmpdir(), `reel-${coin.id}-${Date.now()}.mp4`);
-  await buildReelVideo(bgBuffer, outPath);
+  await buildReelVideo(layers, outPath);
   const videoBuffer = await readFile(outPath);
   console.log(`Video generado (${(videoBuffer.length / 1024 / 1024).toFixed(2)} MB)`);
 
