@@ -9,6 +9,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // mismo estilo que la tarjeta de Facebook pero pensada para pantalla
 // completa de celular. Se renderiza a 2x de resolucion (2160x3840) para
 // que el efecto de zoom lento en el video no se vea pixelado.
+//
+// Genera DOS variantes del mismo diseno (identicas salvo por la zona del
+// grafico): una "vacia" (solo una cuadricula tenue) y otra "completa" (con
+// las velas japonesas ya dibujadas). El script que arma el video usa las
+// dos para animar una revelacion de izquierda a derecha, simulando que el
+// grafico de velas "se dibuja" y sube/baja en vivo.
 
 let fontCache = null;
 async function loadFontsBase64() {
@@ -65,64 +71,94 @@ const TREND_COLORS = {
   bajista: { fg: "#ff7a7a", label: "Bajista" },
 };
 
-function buildSparkline(history, color, x, y, w, h) {
+// Convierte el historial de precios (cierres) en velas japonesas
+// sinteticas: open = cierre anterior, close = cierre actual, y una mecha
+// (high/low) proporcional al movimiento, para que se vea como un grafico
+// de trading real que sube y baja.
+function buildCandles(history, x, y, w, h) {
   if (!Array.isArray(history) || history.length < 2) return "";
-  const points = history.slice(-30).map((p) => p.price);
-  const min = Math.min(...points);
-  const max = Math.max(...points);
-  const range = max - min || 1;
+  const closes = history.slice(-24).map((p) => p.price);
+  const globalRange = Math.max(...closes) - Math.min(...closes) || 1;
 
-  const coords = points.map((p, i) => {
-    const px = x + (i / (points.length - 1)) * w;
-    const py = y + h - ((p - min) / range) * h;
-    return [px, py];
+  const candles = closes.map((close, i) => {
+    const open = i === 0 ? closes[0] : closes[i - 1];
+    const isUp = close >= open;
+    const bodyTop = Math.max(open, close);
+    const bodyBottom = Math.min(open, close);
+    const wick = Math.max(Math.abs(close - open) * 0.7, globalRange * 0.03);
+    return { high: bodyTop + wick, low: bodyBottom - wick, bodyTop, bodyBottom, isUp };
   });
 
-  const linePath = coords
-    .map(([px, py], i) => `${i === 0 ? "M" : "L"}${px.toFixed(1)},${py.toFixed(1)}`)
-    .join(" ");
+  const min = Math.min(...candles.map((c) => c.low));
+  const max = Math.max(...candles.map((c) => c.high));
+  const range = max - min || 1;
+  const n = candles.length;
+  const slot = w / n;
+  const bodyWidth = Math.max(slot * 0.5, 8);
+  const scaleY = (v) => y + h - ((v - min) / range) * h;
 
-  const areaPath =
-    `M${coords[0][0].toFixed(1)},${(y + h).toFixed(1)} ` +
-    coords.map(([px, py]) => `L${px.toFixed(1)},${py.toFixed(1)}`).join(" ") +
-    ` L${coords[coords.length - 1][0].toFixed(1)},${(y + h).toFixed(1)} Z`;
-
-  return `
-    <path d="${areaPath}" fill="url(#sparkFill)" opacity="0.35"/>
-    <path d="${linePath}" fill="none" stroke="${color}" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-  `;
+  return candles
+    .map((c, i) => {
+      const cx = x + slot * (i + 0.5);
+      const color = c.isUp ? "#4ade80" : "#ff7a7a";
+      const yHigh = scaleY(c.high);
+      const yLow = scaleY(c.low);
+      const yTop = scaleY(c.bodyTop);
+      const yBottom = scaleY(c.bodyBottom);
+      const bodyH = Math.max(yBottom - yTop, 8);
+      return (
+        `<line x1="${cx.toFixed(1)}" y1="${yHigh.toFixed(1)}" x2="${cx.toFixed(1)}" y2="${yLow.toFixed(1)}" stroke="${color}" stroke-width="6"/>` +
+        `<rect x="${(cx - bodyWidth / 2).toFixed(1)}" y="${yTop.toFixed(1)}" width="${bodyWidth.toFixed(1)}" height="${bodyH.toFixed(1)}" rx="5" fill="${color}"/>`
+      );
+    })
+    .join("");
 }
 
-export async function renderReelBackground(coin, data) {
-  const fonts = await loadFontsBase64();
-
-  const W = 2160;
-  const H = 3840;
-  const pad = 128;
-
-  const price = formatUSD(data.currentPrice);
-  const rsiInfo = data.rsiSignal ? RSI_COLORS[data.rsiSignal] : null;
-  const rsiValue = data.rsi !== null && data.rsi !== undefined ? data.rsi.toFixed(1) : "N/D";
-  const trendInfo = data.trend ? TREND_COLORS[data.trend] : null;
-  const [c1, c2] = COIN_COLORS[coin.id] || DEFAULT_COLORS;
-
-  const history = Array.isArray(data.history) ? data.history.slice(-30) : [];
-  let changePct = null;
-  if (history.length >= 2) {
-    const first = history[0].price;
-    const last = history[history.length - 1].price;
-    if (first) changePct = ((last - first) / first) * 100;
+// Cuadricula tenue que ocupa el mismo espacio que las velas, para que la
+// variante "vacia" no se vea como un hueco sino como un grafico esperando
+// a dibujarse.
+function buildGrid(x, y, w, h) {
+  const rows = 4;
+  let lines = "";
+  for (let i = 0; i <= rows; i++) {
+    const ly = y + (h / rows) * i;
+    lines += `<line x1="${x}" y1="${ly.toFixed(1)}" x2="${x + w}" y2="${ly.toFixed(1)}" stroke="#1c1d21" stroke-width="3" stroke-dasharray="16 18"/>`;
   }
-  const changeColor = changePct === null ? "#8a8d93" : changePct >= 0 ? "#4ade80" : "#ff7a7a";
-  const changeLabel =
-    changePct === null ? "" : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(1)}% en 30 dias`;
+  return lines;
+}
 
-  const sparkColor = trendInfo ? trendInfo.fg : "#60a5fa";
-  const sparkline = buildSparkline(history, sparkColor, pad, 2050, W - pad * 2, 420);
+function buildCardSvg(coin, data, { withCandles }) {
+  return loadFontsBase64().then((fonts) => {
+    const W = 2160;
+    const H = 3840;
+    const pad = 128;
+    const chartX = pad;
+    const chartY = 2050;
+    const chartW = W - pad * 2;
+    const chartH = 460;
 
-  const initials = escapeXml(coin.symbol.slice(0, 4));
+    const price = formatUSD(data.currentPrice);
+    const rsiInfo = data.rsiSignal ? RSI_COLORS[data.rsiSignal] : null;
+    const rsiValue = data.rsi !== null && data.rsi !== undefined ? data.rsi.toFixed(1) : "N/D";
+    const trendInfo = data.trend ? TREND_COLORS[data.trend] : null;
+    const [c1, c2] = COIN_COLORS[coin.id] || DEFAULT_COLORS;
 
-  const svg = `
+    const history = Array.isArray(data.history) ? data.history.slice(-30) : [];
+    let changePct = null;
+    if (history.length >= 2) {
+      const first = history[0].price;
+      const last = history[history.length - 1].price;
+      if (first) changePct = ((last - first) / first) * 100;
+    }
+    const changeColor = changePct === null ? "#8a8d93" : changePct >= 0 ? "#4ade80" : "#ff7a7a";
+    const changeLabel =
+      changePct === null ? "" : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(1)}% en 30 dias`;
+
+    const chartContent = withCandles ? buildCandles(history, chartX, chartY, chartW, chartH) : buildGrid(chartX, chartY, chartW, chartH);
+
+    const initials = escapeXml(coin.symbol.slice(0, 4));
+
+    return `
 <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <style>
@@ -143,10 +179,6 @@ export async function renderReelBackground(coin, data) {
     <linearGradient id="coinBadge" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="${c1}"/>
       <stop offset="100%" stop-color="${c2}"/>
-    </linearGradient>
-    <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="${sparkColor}" stop-opacity="0.8"/>
-      <stop offset="100%" stop-color="${sparkColor}" stop-opacity="0"/>
     </linearGradient>
   </defs>
 
@@ -174,24 +206,44 @@ export async function renderReelBackground(coin, data) {
       : ""
   }
 
-  <!-- Sparkline -->
-  ${sparkline}
-  <line x1="${pad}" y1="2520" x2="${W - pad}" y2="2520" stroke="#1c1d21" stroke-width="4"/>
+  <!-- Grafico de velas -->
+  ${chartContent}
+  <line x1="${pad}" y1="2560" x2="${W - pad}" y2="2560" stroke="#1c1d21" stroke-width="4"/>
 
   <!-- RSI + Trend -->
-  <rect x="${pad}" y="2600" width="${W - pad * 2}" height="320" rx="48" fill="${rsiInfo ? rsiInfo.bg : "#16171b"}"/>
-  <text x="${pad + 64}" y="2700" font-size="50" font-weight="600" fill="${rsiInfo ? rsiInfo.fg : "#8a8d93"}" opacity="0.85">RSI (14)</text>
-  <text x="${pad + 64}" y="2800" font-size="92" font-weight="700" fill="${rsiInfo ? rsiInfo.fg : "#ffffff"}">${rsiValue} ${rsiInfo ? "&#183; " + rsiInfo.label : ""}</text>
+  <rect x="${pad}" y="2640" width="${W - pad * 2}" height="320" rx="48" fill="${rsiInfo ? rsiInfo.bg : "#16171b"}"/>
+  <text x="${pad + 64}" y="2740" font-size="50" font-weight="600" fill="${rsiInfo ? rsiInfo.fg : "#8a8d93"}" opacity="0.85">RSI (14)</text>
+  <text x="${pad + 64}" y="2840" font-size="92" font-weight="700" fill="${rsiInfo ? rsiInfo.fg : "#ffffff"}">${rsiValue} ${rsiInfo ? "&#183; " + rsiInfo.label : ""}</text>
 
-  <rect x="${pad}" y="2960" width="${W - pad * 2}" height="320" rx="48" fill="#16171b"/>
-  <text x="${pad + 64}" y="3060" font-size="50" font-weight="600" fill="#8a8d93">Tendencia (SMA 7/30)</text>
-  <text x="${pad + 64}" y="3160" font-size="92" font-weight="700" fill="${trendInfo ? trendInfo.fg : "#ffffff"}">${trendInfo ? (data.trend === "alcista" ? "&#9650;" : "&#9660;") : ""} ${trendInfo ? trendInfo.label : "N/D"}</text>
+  <rect x="${pad}" y="3000" width="${W - pad * 2}" height="320" rx="48" fill="#16171b"/>
+  <text x="${pad + 64}" y="3100" font-size="50" font-weight="600" fill="#8a8d93">Tendencia (SMA 7/30)</text>
+  <text x="${pad + 64}" y="3200" font-size="92" font-weight="700" fill="${trendInfo ? trendInfo.fg : "#ffffff"}">${trendInfo ? (data.trend === "alcista" ? "&#9650;" : "&#9660;") : ""} ${trendInfo ? trendInfo.label : "N/D"}</text>
 
   <!-- Footer -->
-  <text x="${pad}" y="3420" font-size="70" font-weight="700" fill="#ffffff">+45 criptomonedas &#183; graficos en vivo &#183; gratis</text>
-  <text x="${pad}" y="3500" font-size="60" font-weight="600" fill="${c1}">invest-platform-chi.vercel.app</text>
-  <text x="${pad}" y="3620" font-size="42" font-weight="400" fill="#5b5e66">No es asesoria financiera. Informate y decide con responsabilidad.</text>
+  <text x="${pad}" y="3460" font-size="70" font-weight="700" fill="#ffffff">+45 criptomonedas &#183; graficos en vivo &#183; gratis</text>
+  <text x="${pad}" y="3540" font-size="60" font-weight="600" fill="${c1}">invest-platform-chi.vercel.app</text>
+  <text x="${pad}" y="3660" font-size="42" font-weight="400" fill="#5b5e66">No es asesoria financiera. Informate y decide con responsabilidad.</text>
 </svg>`;
+  });
+}
 
-  return sharp(Buffer.from(svg)).png().toBuffer();
+// Devuelve las dos variantes (PNG) que necesita el video: "empty" (sin
+// velas, para el instante inicial) y "full" (con las velas ya dibujadas,
+// que se revela progresivamente encima de la vacia).
+export async function renderReelLayers(coin, data) {
+  const [emptySvg, fullSvg] = await Promise.all([
+    buildCardSvg(coin, data, { withCandles: false }),
+    buildCardSvg(coin, data, { withCandles: true }),
+  ]);
+  const [empty, full] = await Promise.all([
+    sharp(Buffer.from(emptySvg)).png().toBuffer(),
+    sharp(Buffer.from(fullSvg)).png().toBuffer(),
+  ]);
+  return { empty, full };
+}
+
+// Se mantiene por compatibilidad: la tarjeta completa (con velas) sola.
+export async function renderReelBackground(coin, data) {
+  const { full } = await renderReelLayers(coin, data);
+  return full;
 }
