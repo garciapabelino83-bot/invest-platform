@@ -1,10 +1,12 @@
 name: Publicar analisis en Facebook
 
-# Publica automaticamente, dos veces al dia, un analisis tecnico (precio,
-# RSI y tendencia) de una criptomoneda distinta en la pagina de Facebook
-# de InvestPanel. Los datos se obtienen del propio endpoint /api/analysis
-# del sitio, y la publicacion se hace via la Graph API de Facebook con el
-# Page Access Token guardado como secreto del repositorio (FB_PAGE_ACCESS_TOKEN).
+# Publica automaticamente, dos veces al dia, una tarjeta con el analisis
+# tecnico (precio, RSI, tendencia y mini-grafico) de una criptomoneda
+# distinta en la pagina de Facebook de InvestPanel. Los datos se obtienen
+# del propio endpoint /api/analysis del sitio, la tarjeta se dibuja con
+# sharp (scripts/render-card.mjs) y se publica como foto via la Graph API
+# de Facebook con el Page Access Token guardado como secreto del
+# repositorio (FB_PAGE_ACCESS_TOKEN).
 
 on:
   schedule:
@@ -23,6 +25,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      - name: Instalar dependencia para dibujar la tarjeta (sharp)
+        run: npm install sharp --no-save
 
       - name: Publicar en la pagina de Facebook
         env:
