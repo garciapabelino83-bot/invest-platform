@@ -417,7 +417,7 @@ export default function Dashboard() {
               </span>
             ) : (
               <button
-                onClick={() => { setShowSubscribeForm(true); document.getElementById("plan-pro")?.scrollIntoView({ behavior: "smooth", block: "center" }); }}
+                onClick={() => setShowSubscribeForm(true)}
                 className="bg-white text-black hover:bg-neutral-200 transition text-xs font-semibold px-3.5 py-1.5 rounded-lg"
               >
                 Plan Pro — $9.99/mes
@@ -427,7 +427,89 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <div className="max-w-[1400px] mx-auto px-6 py-8">
+      {/* --- Hero: lo primero que ve alguien que nunca ha usado InvestPanel --- */}
+      <section className="border-b border-white/10 bg-gradient-to-b from-[#0a0a0b] to-black">
+        <div className="max-w-[1400px] mx-auto px-6 py-14 sm:py-20 grid lg:grid-cols-2 gap-10 items-center">
+          <div>
+            <p className="text-[#0ecb81] text-xs font-semibold uppercase tracking-wide mb-4">
+              Gratis para empezar · Sin tarjeta
+            </p>
+            <h2 className="text-3xl sm:text-4xl font-extrabold tracking-tight leading-tight mb-5">
+              Todo lo que necesitas para seguir cripto y acciones, en español
+            </h2>
+            <p className="text-neutral-400 text-base sm:text-lg max-w-xl mb-8">
+              Gráficos en tiempo real, indicadores técnicos como RSI y MACD, alertas de precio y
+              herramientas para calcular tus ganancias — sin pagar los $30+ al mes que cobran las
+              plataformas en inglés.
+            </p>
+
+            <ul className="grid sm:grid-cols-2 gap-3 mb-9 max-w-xl">
+              {[
+                ["📊", "Gráficos de velas en tiempo real (cripto, acciones e índices)"],
+                ["🔔", "Avisos cuando el precio llegue a tu nivel"],
+                ["🧮", "Calculadora de ganancias, comparador y convertidor"],
+                ["🇪🇸", "Todo en español, explicado sin tecnicismos"],
+              ].map(([emoji, texto]) => (
+                <li key={texto} className="flex items-start gap-2.5 text-sm text-neutral-300">
+                  <span className="text-base leading-none">{emoji}</span>
+                  <span>{texto}</span>
+                </li>
+              ))}
+            </ul>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <a
+                href="/graficos"
+                className="bg-white text-black hover:bg-neutral-200 transition text-sm font-semibold px-5 py-3 rounded-lg"
+              >
+                Ver gráficos gratis →
+              </a>
+              <a
+                href="#plan-pro"
+                className="bg-white/5 hover:bg-white/10 border border-white/10 transition text-sm font-medium px-5 py-3 rounded-lg"
+              >
+                Conocer el Plan Pro
+              </a>
+            </div>
+          </div>
+
+          {/* Mini gráfico decorativo (no es una captura real, solo ilustra el producto) */}
+          <div className="bg-[#0a0a0b] border border-white/10 rounded-2xl p-6 hidden lg:block">
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <p className="text-sm font-semibold">BTC/USDT</p>
+                <p className="text-[11px] text-neutral-500">Gráfico en vivo · InvestPanel</p>
+              </div>
+              <p className="text-[#0ecb81] font-mono text-sm">+2.4%</p>
+            </div>
+            <div className="flex items-end gap-1.5 h-40">
+              {[40, 55, 35, 70, 50, 80, 45, 65, 90, 55, 75, 45, 100, 65, 85, 110].map((h, i) => (
+                <div
+                  key={i}
+                  className="flex-1 rounded-sm"
+                  style={{ height: `${h}px`, background: i % 3 === 1 ? ROJO : VERDE }}
+                />
+              ))}
+            </div>
+            <div className="mt-5 grid grid-cols-3 gap-3 text-center">
+              <div>
+                <p className="text-[10px] text-neutral-500 uppercase tracking-wide">RSI (14d)</p>
+                <p className="text-sm font-mono text-[#0ecb81]">58</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-neutral-500 uppercase tracking-wide">Tendencia</p>
+                <p className="text-sm font-mono text-[#0ecb81]">▲ Alcista</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-neutral-500 uppercase tracking-wide">Monedas</p>
+                <p className="text-sm font-mono">200+</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div id="mi-lista" className="max-w-[1400px] mx-auto px-6 py-8">
         {error && (
           <p className="text-[#f6465d] text-sm mb-6">No se pudieron cargar los precios.</p>
         )}
@@ -583,6 +665,39 @@ export default function Dashboard() {
               )}
             </>
           )}
+        </div>
+
+        {/* --- Preguntas frecuentes: resuelve las dudas típicas antes de que
+            alguien nuevo se vaya sin probar la plataforma --- */}
+        <div className="mt-16">
+          <h2 className="text-sm font-semibold text-neutral-300 uppercase tracking-wide mb-5">
+            Preguntas frecuentes
+          </h2>
+          <div className="grid sm:grid-cols-2 gap-5">
+            {[
+              [
+                "¿InvestPanel es gratis?",
+                "Sí. Ver precios, gráficos, indicadores técnicos (RSI, MACD, medias móviles) y usar la calculadora, el comparador y el convertidor no cuesta nada. El Plan Pro ($9.99/mes, con 7 días de prueba gratis) agrega avisos automáticos de precio y seguimiento de tu cartera.",
+              ],
+              [
+                "¿Necesito experiencia con cripto o bolsa?",
+                "No. Está pensado para gente que recién empieza: cada indicador tiene una explicación en español sin tecnicismos, y puedes empezar solo mirando el precio antes de usar las herramientas más avanzadas.",
+              ],
+              [
+                "¿Qué monedas y mercados cubre?",
+                "Más de 200 criptomonedas (desde Bitcoin y Ethereum hasta memecoins) y también acciones e índices bursátiles, todo desde la misma pantalla de gráficos.",
+              ],
+              [
+                "¿Puedo cancelar el Plan Pro cuando quiera?",
+                "Sí, no hay contrato ni permanencia. Cancelas cuando quieras y sigues usando gratis todo lo que no es Pro.",
+              ],
+            ].map(([pregunta, respuesta]) => (
+              <div key={pregunta} className="bg-[#0a0a0b] border border-white/10 rounded-xl p-5">
+                <p className="text-sm font-semibold mb-2">{pregunta}</p>
+                <p className="text-neutral-400 text-sm leading-relaxed">{respuesta}</p>
+              </div>
+            ))}
+          </div>
         </div>
 
         <p className="text-neutral-700 text-[11px] mt-8 text-center">
