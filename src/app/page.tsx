@@ -417,7 +417,7 @@ export default function Dashboard() {
               </span>
             ) : (
               <button
-                onClick={() => setShowSubscribeForm(true)}
+                onClick={() => { setShowSubscribeForm(true); document.getElementById("plan-pro")?.scrollIntoView({ behavior: "smooth", block: "center" }); }}
                 className="bg-white text-black hover:bg-neutral-200 transition text-xs font-semibold px-3.5 py-1.5 rounded-lg"
               >
                 Plan Pro — $9.99/mes
@@ -527,7 +527,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        <div className="mt-10 bg-[#0a0a0b] border border-white/10 rounded-xl p-7">
+        <div id="plan-pro" className="mt-10 bg-[#0a0a0b] border border-white/10 rounded-xl p-7">
           {isPro ? (
             <>
               <p className="text-[#0ecb81] text-[11px] font-semibold uppercase tracking-wide mb-2">Plan Pro</p>
