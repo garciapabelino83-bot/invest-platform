@@ -1,0 +1,31 @@
+name: Publicar analisis en Facebook
+
+# Publica automaticamente, dos veces al dia, un analisis tecnico (precio,
+# RSI y tendencia) de una criptomoneda distinta en la pagina de Facebook
+# de InvestPanel. Los datos se obtienen del propio endpoint /api/analysis
+# del sitio, y la publicacion se hace via la Graph API de Facebook con el
+# Page Access Token guardado como secreto del repositorio (FB_PAGE_ACCESS_TOKEN).
+
+on:
+  schedule:
+    - cron: "0 14 * * *"
+    - cron: "0 23 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Publicar en la pagina de Facebook
+        env:
+          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
+          FB_PAGE_ID: "1361643533693650"
+        run: node scripts/post-to-facebook.mjs
