@@ -1,0 +1,39 @@
+name: Publicar Reel en Facebook
+
+# Genera y publica automaticamente, una vez al dia, un Reel corto (15s,
+# formato vertical 9:16) con el analisis tecnico de una criptomoneda:
+# una tarjeta animada con efecto de zoom lento, hecha con la misma
+# informacion que los posts de imagen (precio, RSI, tendencia). El video
+# se arma con ffmpeg (ya viene instalado en el runner de GitHub) y se
+# publica en la pagina de Facebook via la Graph API (Reels Publishing
+# API), usando el mismo Page Access Token guardado como secreto del
+# repositorio (FB_PAGE_ACCESS_TOKEN).
+
+on:
+  schedule:
+    - cron: "0 17 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  publicar-reel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Instalar dependencia para dibujar la tarjeta (sharp)
+        run: npm install sharp --no-save
+
+      - name: Verificar ffmpeg
+        run: ffmpeg -version
+
+      - name: Generar y publicar el Reel
+        env:
+          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
+          FB_PAGE_ID: "1361643533693650"
+        run: node scripts/post-reel-to-facebook.mjs
