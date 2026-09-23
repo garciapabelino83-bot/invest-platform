@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { LineChart, Line, ResponsiveContainer } from "recharts";
+import VolumeImbalanceSection from "./VolumeImbalanceSection";
 
 const VERDE = "#0ecb81";
 const ROJO = "#f6465d";
@@ -665,6 +666,13 @@ export default function Dashboard() {
               )}
             </>
           )}
+        </div>
+
+        {/* --- Volume Imbalance (VI): funcion destacada del Plan Pro.
+            Bloqueada (con blur + candado) para quien no es Pro, activa y
+            funcional para quien ya se suscribio. */}
+        <div className="mt-6">
+          <VolumeImbalanceSection locked={!isPro} />
         </div>
 
         {/* --- Preguntas frecuentes: resuelve las dudas típicas antes de que
