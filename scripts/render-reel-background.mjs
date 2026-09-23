@@ -40,6 +40,25 @@ function escapeXml(str) {
     .replace(/>/g, "&gt;");
 }
 
+// Pequena etiqueta con fondo solido, para que el texto se siga leyendo
+// bien aunque una mecha de vela (u otra linea) pase por detras.
+function labelPill(x, y, text, { fontSize = 32, color = "#ffffff", anchor = "start" } = {}) {
+  const charW = fontSize * 0.6;
+  const textW = text.length * charW;
+  const padX = 16;
+  const boxH = fontSize * 1.5;
+  let boxX;
+  if (anchor === "end") boxX = x - textW - padX;
+  else if (anchor === "middle") boxX = x - textW / 2 - padX;
+  else boxX = x - padX;
+  const boxW = textW + padX * 2;
+  const boxY = y - fontSize * 1.05;
+  return (
+    `<rect x="${boxX.toFixed(1)}" y="${boxY.toFixed(1)}" width="${boxW.toFixed(1)}" height="${boxH.toFixed(1)}" rx="10" fill="#05060a" fill-opacity="0.78"/>` +
+    `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-size="${fontSize}" font-weight="700" fill="${color}" text-anchor="${anchor}">${escapeXml(text)}</text>`
+  );
+}
+
 function formatUSD(n) {
   if (n === null || n === undefined) return "N/D";
   if (n < 1) return `$${n.toFixed(6)}`;
@@ -145,6 +164,106 @@ function computeChartInsights(history) {
   return { candles, support, resistance, vi };
 }
 
+// --- Estructura de mercado estilo SMC (Smart Money Concepts) ---
+//
+// Ademas del soporte/resistencia y la zona VI de mas arriba, se calcula
+// una lectura de estructura mas completa sobre las mismas velas:
+// swing highs/lows, un BOS (Break of Structure — el precio rompiendo un
+// maximo o minimo previo), el Order Block que origino ese movimiento, un
+// nivel de liquidez (un swing anterior, todavia no visitado, donde se
+// acumulan stops) y una entrada con relacion riesgo/beneficio (RR) hacia
+// el otro extremo del rango. Todo esto sale de los precios reales — si
+// no hay una ruptura clara, simplemente no se dibuja nada de esto.
+function findSwingPoints(candles, k = 2) {
+  const highs = [];
+  const lows = [];
+  for (let i = k; i < candles.length - k; i++) {
+    const windowSlice = candles.slice(i - k, i + k + 1);
+    if (candles[i].high === Math.max(...windowSlice.map((c) => c.high))) {
+      highs.push({ index: i, price: candles[i].high });
+    }
+    if (candles[i].low === Math.min(...windowSlice.map((c) => c.low))) {
+      lows.push({ index: i, price: candles[i].low });
+    }
+  }
+  return { highs, lows };
+}
+
+function computeSmcStructure(candles) {
+  if (!candles || candles.length < 10) return null;
+  const { highs, lows } = findSwingPoints(candles, 2);
+  if (highs.length === 0 || lows.length === 0) return null;
+
+  // El BOS mas reciente: la primera vela que cierra mas alla de un swing
+  // high (ruptura alcista) o de un swing low (ruptura bajista) anterior.
+  let bestBos = null;
+  for (const sh of highs) {
+    for (let j = sh.index + 1; j < candles.length; j++) {
+      if (candles[j].close > sh.price) {
+        const candidate = { bias: "alcista", price: sh.price, swingIndex: sh.index, breakIndex: j };
+        if (!bestBos || candidate.breakIndex > bestBos.breakIndex) bestBos = candidate;
+        break;
+      }
+    }
+  }
+  for (const sl of lows) {
+    for (let j = sl.index + 1; j < candles.length; j++) {
+      if (candles[j].close < sl.price) {
+        const candidate = { bias: "bajista", price: sl.price, swingIndex: sl.index, breakIndex: j };
+        if (!bestBos || candidate.breakIndex > bestBos.breakIndex) bestBos = candidate;
+        break;
+      }
+    }
+  }
+  if (!bestBos) return null;
+
+  const isBull = bestBos.bias === "alcista";
+
+  // Order Block: la ultima vela contraria al impulso, justo antes de que
+  // arranque el movimiento que provoco la ruptura.
+  let obIndex = bestBos.breakIndex - 1;
+  while (obIndex > 0 && candles[obIndex].isUp === isBull) obIndex--;
+  const ob = candles[obIndex];
+  const orderBlock = {
+    index: obIndex,
+    top: Math.max(ob.open, ob.close),
+    bottom: Math.min(ob.open, ob.close),
+  };
+
+  // Liquidez: un swing anterior al Order Block, mas alla de su zona — un
+  // nivel que el precio todavia no toco, donde se acumulan ordenes de
+  // stop loss.
+  let liquidity;
+  if (isBull) {
+    const priorLows = lows.filter((l) => l.index < obIndex && l.price < orderBlock.bottom);
+    liquidity = {
+      price: priorLows.length ? Math.min(...priorLows.map((l) => l.price)) : Math.min(...candles.map((c) => c.low)),
+    };
+  } else {
+    const priorHighs = highs.filter((hh) => hh.index < obIndex && hh.price > orderBlock.top);
+    liquidity = {
+      price: priorHighs.length ? Math.max(...priorHighs.map((hh) => hh.price)) : Math.max(...candles.map((c) => c.high)),
+    };
+  }
+
+  // Entrada / stop / objetivo / RR, para dibujar la flecha de la
+  // operacion, igual que en un plan de trading real.
+  const entryPrice = isBull ? orderBlock.top : orderBlock.bottom;
+  const stopPrice = liquidity.price;
+  const targetPrice = isBull ? Math.max(...candles.map((c) => c.high)) : Math.min(...candles.map((c) => c.low));
+  const risk = Math.abs(entryPrice - stopPrice);
+  const reward = Math.abs(targetPrice - entryPrice);
+  const rr = risk > 0 ? reward / risk : null;
+
+  return {
+    bias: bestBos.bias,
+    bos: { price: bestBos.price, swingIndex: bestBos.swingIndex, breakIndex: bestBos.breakIndex },
+    orderBlock,
+    liquidity,
+    entry: { entryPrice, stopPrice, targetPrice, rr },
+  };
+}
+
 function buildCandlesSvg(candles, x, y, w, h) {
   const scaleY = makeScaleY(candles, y, h);
   const n = candles.length;
@@ -200,11 +319,156 @@ function buildViSvg(candles, insights, x, y, w, h) {
   const yBottom = scaleY(zoneLow);
   const rectH = Math.max(yBottom - yTop, 6);
   const color = bias === "alcista" ? "#4ade80" : "#ff7a7a";
-  const labelY = yTop + rectH / 2 + 12;
+
+  return `<rect x="${xStart.toFixed(1)}" y="${yTop.toFixed(1)}" width="${(xEnd - xStart).toFixed(1)}" height="${rectH.toFixed(1)}" fill="${color}" fill-opacity="0.16" stroke="${color}" stroke-width="3" stroke-dasharray="10 8"/>`;
+}
+
+// Etiqueta "VI" de la zona de Volume Imbalance — se dibuja aparte, encima
+// de las velas, para que nunca quede tapada por una mecha.
+function buildViLabelSvg(candles, insights, x, y, w, h) {
+  if (!insights || !insights.vi) return "";
+  const { i, bias, zoneLow, zoneHigh } = insights.vi;
+  const scaleY = makeScaleY(candles, y, h);
+  const n = candles.length;
+  const slot = w / n;
+  const xStart = x + slot * i;
+  const yTop = scaleY(zoneHigh);
+  const yBottom = scaleY(zoneLow);
+  const color = bias === "alcista" ? "#4ade80" : "#ff7a7a";
+  return labelPill(xStart + 14, yTop + (yBottom - yTop) / 2 + 12, "VI", { fontSize: 34, color });
+}
+
+// Linea de BOS (Break of Structure): el nivel del swing que se rompio,
+// dibujada solo entre ese swing y la vela que lo rompio (no en toda la
+// pantalla), para que se lea como "aqui se rompio la estructura".
+function buildBosSvg(candles, structure, x, y, w, h) {
+  const scaleY = makeScaleY(candles, y, h);
+  const n = candles.length;
+  const slot = w / n;
+  const { swingIndex, breakIndex, price } = structure.bos;
+  const color = "#facc15";
+  const xStart = x + slot * (swingIndex + 0.5);
+  const xEnd = x + slot * (breakIndex + 1);
+  const ly = scaleY(price);
+
+  return `<line x1="${xStart.toFixed(1)}" y1="${ly.toFixed(1)}" x2="${xEnd.toFixed(1)}" y2="${ly.toFixed(1)}" stroke="${color}" stroke-width="4" stroke-dasharray="16 10"/>`;
+}
+
+function buildBosLabelSvg(candles, structure, x, y, w, h) {
+  const scaleY = makeScaleY(candles, y, h);
+  const n = candles.length;
+  const slot = w / n;
+  const { swingIndex, price } = structure.bos;
+  const color = "#facc15";
+  const xStart = x + slot * (swingIndex + 0.5);
+  const ly = scaleY(price);
+  const labelY = ly - 18 > y ? ly - 18 : ly + 44;
+  return labelPill(xStart, labelY, "BOS", { fontSize: 34, color });
+}
+
+// Order Block (banda oscura y delgada) y Zona de Demanda/Oferta (banda
+// azul o roja, mas ancha, que se extiende hacia la derecha porque sigue
+// "vigente"). Es la misma zona que dibuja la referencia: el Order Block
+// justo pegado a la Zona de Demanda/Oferta.
+function buildZonesSvg(candles, structure, x, y, w, h) {
+  const scaleY = makeScaleY(candles, y, h);
+  const n = candles.length;
+  const slot = w / n;
+  const isBull = structure.bias === "alcista";
+  const { index, top, bottom } = structure.orderBlock;
+
+  const xStart = x + slot * index;
+  const xEnd = x + w;
+  const yTop = scaleY(top);
+  const yBottom = scaleY(bottom);
+  const obH = Math.max(yBottom - yTop, 10);
+
+  const zoneColor = isBull ? "#4f8fff" : "#ff7a7a";
+  // La zona de demanda/oferta se dibuja un poco mas ancha que el order
+  // block puntual, para que se lea como una franja de precio.
+  const zonePad = Math.max(h * 0.03, 14);
+  const zoneTop = isBull ? yTop : yTop - zonePad;
+  const zoneH = obH + zonePad;
 
   return (
-    `<rect x="${xStart.toFixed(1)}" y="${yTop.toFixed(1)}" width="${(xEnd - xStart).toFixed(1)}" height="${rectH.toFixed(1)}" fill="${color}" fill-opacity="0.16" stroke="${color}" stroke-width="3" stroke-dasharray="10 8"/>` +
-    `<text x="${(xStart + 14).toFixed(1)}" y="${labelY.toFixed(1)}" font-size="34" font-weight="700" fill="${color}">VI</text>`
+    `<rect x="${xStart.toFixed(1)}" y="${zoneTop.toFixed(1)}" width="${(xEnd - xStart).toFixed(1)}" height="${zoneH.toFixed(1)}" fill="${zoneColor}" fill-opacity="0.14" stroke="${zoneColor}" stroke-width="3"/>` +
+    `<rect x="${xStart.toFixed(1)}" y="${yTop.toFixed(1)}" width="${Math.min(xEnd - xStart, slot * 3).toFixed(1)}" height="${obH.toFixed(1)}" fill="#9aa0ad" fill-opacity="0.22" stroke="#9aa0ad" stroke-width="2.5"/>`
+  );
+}
+
+// Etiquetas "Zona de Demanda/Oferta" y "Order Block" — se dibujan aparte,
+// encima de las velas, con fondo solido, para que nunca queden tapadas
+// por una mecha (el bug que se vio en la prueba local).
+function buildZonesLabelsSvg(candles, structure, x, y, w, h) {
+  const scaleY = makeScaleY(candles, y, h);
+  const n = candles.length;
+  const slot = w / n;
+  const isBull = structure.bias === "alcista";
+  const { index, top, bottom } = structure.orderBlock;
+
+  const xStart = x + slot * index;
+  const yTop = scaleY(top);
+  const yBottom = scaleY(bottom);
+  const obH = Math.max(yBottom - yTop, 10);
+
+  const zoneColor = isBull ? "#4f8fff" : "#ff7a7a";
+  const zoneLabel = isBull ? "Zona de Demanda" : "Zona de Oferta";
+  const zonePad = Math.max(h * 0.03, 14);
+  const zoneTop = isBull ? yTop : yTop - zonePad;
+  const zoneH = obH + zonePad;
+
+  return (
+    labelPill(xStart + 14, zoneTop + zoneH + 40, zoneLabel, { fontSize: 34, color: zoneColor }) +
+    labelPill(xStart + 14, yTop - 14, "Order Block", { fontSize: 30, color: "#c7cad1" })
+  );
+}
+
+// Linea de liquidez: un nivel mas alla de la zona de demanda/oferta,
+// todavia no visitado por el precio, donde se acumulan stops — el "cebo"
+// del stop-loss hunting.
+function buildLiquiditySvg(candles, structure, x, y, w, h) {
+  const scaleY = makeScaleY(candles, y, h);
+  const ly = scaleY(structure.liquidity.price);
+  const color = "#e2e4e9";
+
+  return `<line x1="${x}" y1="${ly.toFixed(1)}" x2="${x + w}" y2="${ly.toFixed(1)}" stroke="${color}" stroke-width="3" stroke-dasharray="6 10" opacity="0.8"/>`;
+}
+
+function buildLiquidityLabelSvg(candles, structure, x, y, w, h) {
+  const scaleY = makeScaleY(candles, y, h);
+  const ly = scaleY(structure.liquidity.price);
+  const isBull = structure.bias === "alcista";
+  const labelY = isBull ? ly + 44 : ly - 18;
+  const color = "#e2e4e9";
+  return labelPill(x + w - 14, labelY, "Liquidez", { fontSize: 32, color, anchor: "end" });
+}
+
+// Flecha de entrada hacia el objetivo, con la relacion riesgo/beneficio
+// (RR), igual que en un plan de trade real: desde el Order Block hasta
+// el otro extremo del rango.
+function buildEntryArrowSvg(candles, structure, x, y, w, h) {
+  const scaleY = makeScaleY(candles, y, h);
+  const n = candles.length;
+  const slot = w / n;
+  const isBull = structure.bias === "alcista";
+  const { entryPrice, targetPrice, rr } = structure.entry;
+
+  const xStart = x + slot * (structure.orderBlock.index + 2);
+  const xEnd = x + w - 40;
+  const yStart = scaleY(entryPrice);
+  const yEnd = scaleY(targetPrice);
+  const color = isBull ? "#4ade80" : "#ff7a7a";
+  const markerId = isBull ? "arrowHeadUp" : "arrowHeadDown";
+  const midX = (xStart + xEnd) / 2;
+  const midY = (yStart + yEnd) / 2;
+  const rrLabel = rr !== null ? `RR ${rr.toFixed(1)}` : "";
+
+  return (
+    `<line x1="${xStart.toFixed(1)}" y1="${yStart.toFixed(1)}" x2="${xEnd.toFixed(1)}" y2="${yEnd.toFixed(1)}" stroke="${color}" stroke-width="5" stroke-dasharray="4 10" marker-end="url(#${markerId})"/>` +
+    (rrLabel
+      ? `<rect x="${(midX - 90).toFixed(1)}" y="${(midY - 60).toFixed(1)}" width="180" height="72" rx="16" fill="#0a0b0e" stroke="${color}" stroke-width="2.5"/>` +
+        `<text x="${midX.toFixed(1)}" y="${(midY - 14).toFixed(1)}" font-size="38" font-weight="700" fill="${color}" text-anchor="middle">${rrLabel}</text>`
+      : "")
   );
 }
 
@@ -227,9 +491,9 @@ function buildCardSvg(coin, data, { withCandles }) {
     const H = 3840;
     const pad = 128;
     const chartX = pad;
-    const chartY = 2050;
+    const chartY = 1200;
     const chartW = W - pad * 2;
-    const chartH = 460;
+    const chartH = 1900;
 
     const price = formatUSD(data.currentPrice);
     const rsiInfo = data.rsiSignal ? RSI_COLORS[data.rsiSignal] : null;
@@ -249,15 +513,29 @@ function buildCardSvg(coin, data, { withCandles }) {
       changePct === null ? "" : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(1)}% en 30 dias`;
 
     const insights = computeChartInsights(history);
+    const structure = insights.candles ? computeSmcStructure(insights.candles) : null;
     const chartContent =
       withCandles && insights.candles
-        ? buildLevelsSvg(insights.candles, insights, chartX, chartY, chartW, chartH) +
+        ? (structure
+            ? buildZonesSvg(insights.candles, structure, chartX, chartY, chartW, chartH) +
+              buildBosSvg(insights.candles, structure, chartX, chartY, chartW, chartH) +
+              buildLiquiditySvg(insights.candles, structure, chartX, chartY, chartW, chartH)
+            : buildLevelsSvg(insights.candles, insights, chartX, chartY, chartW, chartH)) +
           buildViSvg(insights.candles, insights, chartX, chartY, chartW, chartH) +
-          buildCandlesSvg(insights.candles, chartX, chartY, chartW, chartH)
+          buildCandlesSvg(insights.candles, chartX, chartY, chartW, chartH) +
+          (structure
+            ? buildBosLabelSvg(insights.candles, structure, chartX, chartY, chartW, chartH) +
+              buildZonesLabelsSvg(insights.candles, structure, chartX, chartY, chartW, chartH) +
+              buildLiquidityLabelSvg(insights.candles, structure, chartX, chartY, chartW, chartH)
+            : "") +
+          buildViLabelSvg(insights.candles, insights, chartX, chartY, chartW, chartH) +
+          (structure ? buildEntryArrowSvg(insights.candles, structure, chartX, chartY, chartW, chartH) : "")
         : buildGrid(chartX, chartY, chartW, chartH);
-    const viLine = insights.vi
-      ? `<text x="${pad}" y="3400" font-size="46" font-weight="600" fill="${insights.vi.bias === "alcista" ? "#4ade80" : "#ff7a7a"}">Zona VI detectada &#183; sesgo ${insights.vi.bias}</text>`
-      : "";
+
+    const bannerText = structure
+      ? `ESTRUCTURA SMC · BOS + ORDER BLOCK · SESGO ${structure.bias.toUpperCase()}`
+      : "ESTRUCTURA DE MERCADO (SMC)";
+    const bannerColor = structure ? (structure.bias === "alcista" ? "#4ade80" : "#ff7a7a") : "#8a8d93";
 
     const initials = escapeXml(coin.symbol.slice(0, 4));
 
@@ -283,6 +561,12 @@ function buildCardSvg(coin, data, { withCandles }) {
       <stop offset="0%" stop-color="${c1}"/>
       <stop offset="100%" stop-color="${c2}"/>
     </linearGradient>
+    <marker id="arrowHeadUp" markerWidth="14" markerHeight="14" refX="6" refY="10" orient="auto">
+      <path d="M0,10 L6,0 L12,10 Z" fill="#4ade80"/>
+    </marker>
+    <marker id="arrowHeadDown" markerWidth="14" markerHeight="14" refX="6" refY="4" orient="auto">
+      <path d="M0,4 L6,14 L12,4 Z" fill="#ff7a7a"/>
+    </marker>
   </defs>
 
   <rect width="${W}" height="${H}" fill="url(#bg)"/>
@@ -300,35 +584,36 @@ function buildCardSvg(coin, data, { withCandles }) {
   <text x="${pad + 300}" y="530" font-size="58" font-weight="400" fill="#8a8d93">${escapeXml(coin.symbol)} / USD &#183; Analisis tecnico</text>
 
   <!-- Price -->
-  <text x="${pad}" y="880" font-size="54" font-weight="600" fill="#71747c" letter-spacing="3">PRECIO ACTUAL</text>
-  <text x="${pad}" y="1060" font-size="210" font-weight="700" fill="#ffffff">${escapeXml(price)}</text>
+  <text x="${pad}" y="700" font-size="46" font-weight="600" fill="#71747c" letter-spacing="3">PRECIO ACTUAL</text>
+  <text x="${pad}" y="860" font-size="160" font-weight="700" fill="#ffffff">${escapeXml(price)}</text>
   ${
     changePct !== null
-      ? `<rect x="${pad}" y="1110" width="${changeLabel.length * 30 + 80}" height="100" rx="50" fill="#16171b"/>
-         <text x="${pad + 40}" y="1178" font-size="50" font-weight="600" fill="${changeColor}">${changeLabel}</text>`
+      ? `<rect x="${pad}" y="900" width="${changeLabel.length * 28 + 80}" height="90" rx="45" fill="#16171b"/>
+         <text x="${pad + 40}" y="962" font-size="46" font-weight="600" fill="${changeColor}">${changeLabel}</text>`
       : ""
   }
 
+  <!-- Banner de estructura -->
+  <rect x="${pad}" y="1040" width="${W - pad * 2}" height="110" rx="24" fill="none" stroke="${bannerColor}" stroke-width="5"/>
+  <text x="${W / 2}" y="1112" font-size="42" font-weight="700" fill="${bannerColor}" text-anchor="middle">${escapeXml(bannerText)}</text>
+
   <!-- Grafico de velas -->
   ${chartContent}
-  <line x1="${pad}" y1="2560" x2="${W - pad}" y2="2560" stroke="#1c1d21" stroke-width="4"/>
+  <line x1="${pad}" y1="3150" x2="${W - pad}" y2="3150" stroke="#1c1d21" stroke-width="4"/>
 
-  <!-- RSI + Trend -->
-  <rect x="${pad}" y="2640" width="${W - pad * 2}" height="320" rx="48" fill="${rsiInfo ? rsiInfo.bg : "#16171b"}"/>
-  <text x="${pad + 64}" y="2740" font-size="50" font-weight="600" fill="${rsiInfo ? rsiInfo.fg : "#8a8d93"}" opacity="0.85">RSI (14)</text>
-  <text x="${pad + 64}" y="2840" font-size="92" font-weight="700" fill="${rsiInfo ? rsiInfo.fg : "#ffffff"}">${rsiValue} ${rsiInfo ? "&#183; " + rsiInfo.label : ""}</text>
+  <!-- RSI + Tendencia, en una sola fila para dejarle todo el espacio al grafico -->
+  <rect x="${pad}" y="3190" width="${(W - pad * 2 - 40) / 2}" height="280" rx="40" fill="${rsiInfo ? rsiInfo.bg : "#16171b"}"/>
+  <text x="${pad + 56}" y="3280" font-size="42" font-weight="600" fill="${rsiInfo ? rsiInfo.fg : "#8a8d93"}" opacity="0.85">RSI (14)</text>
+  <text x="${pad + 56}" y="3380" font-size="72" font-weight="700" fill="${rsiInfo ? rsiInfo.fg : "#ffffff"}">${rsiValue} ${rsiInfo ? "&#183; " + rsiInfo.label : ""}</text>
 
-  <rect x="${pad}" y="3000" width="${W - pad * 2}" height="320" rx="48" fill="#16171b"/>
-  <text x="${pad + 64}" y="3100" font-size="50" font-weight="600" fill="#8a8d93">Tendencia (SMA 7/30)</text>
-  <text x="${pad + 64}" y="3200" font-size="92" font-weight="700" fill="${trendInfo ? trendInfo.fg : "#ffffff"}">${trendInfo ? (data.trend === "alcista" ? "&#9650;" : "&#9660;") : ""} ${trendInfo ? trendInfo.label : "N/D"}</text>
-
-  <!-- Volume Imbalance (VI), solo si se detecto una zona en el historial -->
-  ${viLine}
+  <rect x="${pad + (W - pad * 2 - 40) / 2 + 40}" y="3190" width="${(W - pad * 2 - 40) / 2}" height="280" rx="40" fill="#16171b"/>
+  <text x="${pad + (W - pad * 2 - 40) / 2 + 40 + 56}" y="3280" font-size="42" font-weight="600" fill="#8a8d93">Tendencia</text>
+  <text x="${pad + (W - pad * 2 - 40) / 2 + 40 + 56}" y="3380" font-size="72" font-weight="700" fill="${trendInfo ? trendInfo.fg : "#ffffff"}">${trendInfo ? (data.trend === "alcista" ? "&#9650;" : "&#9660;") : ""} ${trendInfo ? trendInfo.label : "N/D"}</text>
 
   <!-- Footer -->
-  <text x="${pad}" y="3460" font-size="70" font-weight="700" fill="#ffffff">+45 criptomonedas &#183; graficos en vivo &#183; gratis</text>
-  <text x="${pad}" y="3540" font-size="60" font-weight="600" fill="${c1}">invest-platform-chi.vercel.app</text>
-  <text x="${pad}" y="3660" font-size="42" font-weight="400" fill="#5b5e66">No es asesoria financiera. Informate y decide con responsabilidad.</text>
+  <text x="${pad}" y="3560" font-size="60" font-weight="700" fill="#ffffff">+45 criptomonedas &#183; graficos en vivo &#183; gratis</text>
+  <text x="${pad}" y="3630" font-size="52" font-weight="600" fill="${c1}">invest-platform-chi.vercel.app</text>
+  <text x="${pad}" y="3700" font-size="38" font-weight="400" fill="#5b5e66">No es asesoria financiera. Informate y decide con responsabilidad.</text>
 </svg>`;
   });
 }
@@ -336,25 +621,4 @@ function buildCardSvg(coin, data, { withCandles }) {
 // Devuelve las dos variantes (PNG) que necesita el video: "empty" (sin
 // velas, para el instante inicial) y "full" (con las velas ya dibujadas,
 // que se revela progresivamente encima de la vacia).
-export async function renderReelLayers(coin, data) {
-  const [emptySvg, fullSvg] = await Promise.all([
-    buildCardSvg(coin, data, { withCandles: false }),
-    buildCardSvg(coin, data, { withCandles: true }),
-  ]);
-  const [empty, full] = await Promise.all([
-    sharp(Buffer.from(emptySvg)).png().toBuffer(),
-    sharp(Buffer.from(fullSvg)).png().toBuffer(),
-  ]);
-  return { empty, full };
-}
-
-// Se mantiene por compatibilidad: la tarjeta completa (con velas) sola.
-export async function renderReelBackground(coin, data) {
-  const { full } = await renderReelLayers(coin, data);
-  return full;
-}
-
-// Se exporta tambien para que el script que arma la descripcion del Reel
-// pueda mencionar el mismo soporte/resistencia y la misma zona VI que se
-// dibujan en el video (un solo calculo, sin duplicar logica).
-export { computeChartInsights, formatUSD };
+export async function
