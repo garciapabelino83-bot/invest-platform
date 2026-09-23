@@ -12,7 +12,12 @@ name: Publicar Reel en Facebook
 on:
   schedule:
     - cron: "0 17 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      coin:
+        description: "Forzar una moneda especifica (bitcoin, ethereum, solana, ripple, cardano, binancecoin). Vacio = rotacion normal del dia."
+        required: false
+        type: string
 
 jobs:
   publicar-reel:
@@ -68,4 +73,5 @@ jobs:
           PIPER_BIN: ${{ github.workspace }}/piper/piper
           PIPER_MODEL: ${{ github.workspace }}/piper-voices/es_MX-claude-high.onnx
           LD_LIBRARY_PATH: ${{ github.workspace }}/piper
+          FORCE_COIN: ${{ github.event.inputs.coin }}
         run: node scripts/post-reel-to-facebook.mjs
