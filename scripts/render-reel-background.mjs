@@ -75,27 +75,81 @@ const TREND_COLORS = {
 // sinteticas: open = cierre anterior, close = cierre actual, y una mecha
 // (high/low) proporcional al movimiento, para que se vea como un grafico
 // de trading real que sube y baja.
-function buildCandles(history, x, y, w, h) {
-  if (!Array.isArray(history) || history.length < 2) return "";
+function computeCandles(history) {
+  if (!Array.isArray(history) || history.length < 2) return null;
   const closes = history.slice(-24).map((p) => p.price);
   const globalRange = Math.max(...closes) - Math.min(...closes) || 1;
 
-  const candles = closes.map((close, i) => {
+  return closes.map((close, i) => {
     const open = i === 0 ? closes[0] : closes[i - 1];
     const isUp = close >= open;
     const bodyTop = Math.max(open, close);
     const bodyBottom = Math.min(open, close);
     const wick = Math.max(Math.abs(close - open) * 0.7, globalRange * 0.03);
-    return { high: bodyTop + wick, low: bodyBottom - wick, bodyTop, bodyBottom, isUp };
+    return { open, close, high: bodyTop + wick, low: bodyBottom - wick, bodyTop, bodyBottom, isUp };
   });
+}
 
+function makeScaleY(candles, y, h) {
   const min = Math.min(...candles.map((c) => c.low));
   const max = Math.max(...candles.map((c) => c.high));
   const range = max - min || 1;
+  return (v) => y + h - ((v - min) / range) * h;
+}
+
+// Calcula, a partir de las mismas velas sinteticas que se dibujan en la
+// tarjeta, los niveles de soporte/resistencia y una posible zona de
+// Volume Imbalance (VI) — el mismo concepto que ya explicamos en el
+// dashboard de InvestPanel (hueco entre el cuerpo de una vela y el de la
+// vela dos posiciones despues, en la misma direccion, sin contar la
+// mecha). Se calcula una sola vez y se reutiliza tanto para dibujarlo en
+// el video como para mencionarlo en la descripcion del Reel, asi el
+// video y el texto siempre coinciden.
+function computeChartInsights(history) {
+  const candles = computeCandles(history);
+  if (!candles || candles.length < 3) {
+    return { candles, support: null, resistance: null, vi: null };
+  }
+
+  // Soporte/resistencia: minimo y maximo de la estructura previa (sin
+  // contar las ultimas 3 velas), para que representen niveles anteriores
+  // que el precio mas reciente podria estar retesteando, en vez de
+  // simplemente el extremo de la ultima vela.
+  const structural = candles.length > 6 ? candles.slice(0, -3) : candles;
+  const resistance = Math.max(...structural.map((c) => c.bodyTop));
+  const support = Math.min(...structural.map((c) => c.bodyBottom));
+
+  // Volume Imbalance: se busca, entre todas las velas, el hueco mas
+  // grande entre el cuerpo de una vela y el cuerpo de la vela dos
+  // posiciones despues (misma direccion). Si no hay ningun hueco por
+  // encima del umbral minimo, no se marca ninguna zona — no se inventa.
+  const min = Math.min(...candles.map((c) => c.low));
+  const max = Math.max(...candles.map((c) => c.high));
+  const range = max - min || 1;
+  const minGap = range * 0.05;
+
+  let vi = null;
+  for (let i = 0; i < candles.length - 2; i++) {
+    const a = candles[i];
+    const c = candles[i + 2];
+    const gapUp = c.bodyBottom - a.bodyTop;
+    const gapDown = a.bodyBottom - c.bodyTop;
+    if (gapUp > minGap && (!vi || gapUp > vi.gap)) {
+      vi = { i, gap: gapUp, bias: "alcista", zoneLow: a.bodyTop, zoneHigh: c.bodyBottom };
+    }
+    if (gapDown > minGap && (!vi || gapDown > vi.gap)) {
+      vi = { i, gap: gapDown, bias: "bajista", zoneLow: c.bodyTop, zoneHigh: a.bodyBottom };
+    }
+  }
+
+  return { candles, support, resistance, vi };
+}
+
+function buildCandlesSvg(candles, x, y, w, h) {
+  const scaleY = makeScaleY(candles, y, h);
   const n = candles.length;
   const slot = w / n;
   const bodyWidth = Math.max(slot * 0.5, 8);
-  const scaleY = (v) => y + h - ((v - min) / range) * h;
 
   return candles
     .map((c, i) => {
@@ -112,6 +166,46 @@ function buildCandles(history, x, y, w, h) {
       );
     })
     .join("");
+}
+
+// Lineas punteadas de soporte (verde) y resistencia (roja) sobre el
+// grafico, con su precio, dibujadas detras de las velas.
+function buildLevelsSvg(candles, insights, x, y, w, h) {
+  if (!insights || insights.support === null || insights.resistance === null) return "";
+  const scaleY = makeScaleY(candles, y, h);
+
+  const line = (value, color, label) => {
+    const ly = scaleY(value);
+    const ty = ly - 16 > y ? ly - 16 : ly + 40;
+    return (
+      `<line x1="${x}" y1="${ly.toFixed(1)}" x2="${x + w}" y2="${ly.toFixed(1)}" stroke="${color}" stroke-width="4" stroke-dasharray="14 12" opacity="0.85"/>` +
+      `<text x="${x + w}" y="${ty.toFixed(1)}" font-size="38" font-weight="600" fill="${color}" text-anchor="end">${label} ${escapeXml(formatUSD(value))}</text>`
+    );
+  };
+
+  return line(insights.resistance, "#ff7a7a", "Resistencia") + line(insights.support, "#4ade80", "Soporte");
+}
+
+// Zona de Volume Imbalance: un rectangulo punteado semitransparente
+// detras de las velas que la formaron, con una pequena etiqueta "VI".
+function buildViSvg(candles, insights, x, y, w, h) {
+  if (!insights || !insights.vi) return "";
+  const { i, bias, zoneLow, zoneHigh } = insights.vi;
+  const scaleY = makeScaleY(candles, y, h);
+  const n = candles.length;
+  const slot = w / n;
+  const xStart = x + slot * i;
+  const xEnd = x + slot * (i + 3);
+  const yTop = scaleY(zoneHigh);
+  const yBottom = scaleY(zoneLow);
+  const rectH = Math.max(yBottom - yTop, 6);
+  const color = bias === "alcista" ? "#4ade80" : "#ff7a7a";
+  const labelY = yTop + rectH / 2 + 12;
+
+  return (
+    `<rect x="${xStart.toFixed(1)}" y="${yTop.toFixed(1)}" width="${(xEnd - xStart).toFixed(1)}" height="${rectH.toFixed(1)}" fill="${color}" fill-opacity="0.16" stroke="${color}" stroke-width="3" stroke-dasharray="10 8"/>` +
+    `<text x="${(xStart + 14).toFixed(1)}" y="${labelY.toFixed(1)}" font-size="34" font-weight="700" fill="${color}">VI</text>`
+  );
 }
 
 // Cuadricula tenue que ocupa el mismo espacio que las velas, para que la
@@ -154,7 +248,16 @@ function buildCardSvg(coin, data, { withCandles }) {
     const changeLabel =
       changePct === null ? "" : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(1)}% en 30 dias`;
 
-    const chartContent = withCandles ? buildCandles(history, chartX, chartY, chartW, chartH) : buildGrid(chartX, chartY, chartW, chartH);
+    const insights = computeChartInsights(history);
+    const chartContent =
+      withCandles && insights.candles
+        ? buildLevelsSvg(insights.candles, insights, chartX, chartY, chartW, chartH) +
+          buildViSvg(insights.candles, insights, chartX, chartY, chartW, chartH) +
+          buildCandlesSvg(insights.candles, chartX, chartY, chartW, chartH)
+        : buildGrid(chartX, chartY, chartW, chartH);
+    const viLine = insights.vi
+      ? `<text x="${pad}" y="3400" font-size="46" font-weight="600" fill="${insights.vi.bias === "alcista" ? "#4ade80" : "#ff7a7a"}">Zona VI detectada &#183; sesgo ${insights.vi.bias}</text>`
+      : "";
 
     const initials = escapeXml(coin.symbol.slice(0, 4));
 
@@ -219,6 +322,9 @@ function buildCardSvg(coin, data, { withCandles }) {
   <text x="${pad + 64}" y="3100" font-size="50" font-weight="600" fill="#8a8d93">Tendencia (SMA 7/30)</text>
   <text x="${pad + 64}" y="3200" font-size="92" font-weight="700" fill="${trendInfo ? trendInfo.fg : "#ffffff"}">${trendInfo ? (data.trend === "alcista" ? "&#9650;" : "&#9660;") : ""} ${trendInfo ? trendInfo.label : "N/D"}</text>
 
+  <!-- Volume Imbalance (VI), solo si se detecto una zona en el historial -->
+  ${viLine}
+
   <!-- Footer -->
   <text x="${pad}" y="3460" font-size="70" font-weight="700" fill="#ffffff">+45 criptomonedas &#183; graficos en vivo &#183; gratis</text>
   <text x="${pad}" y="3540" font-size="60" font-weight="600" fill="${c1}">invest-platform-chi.vercel.app</text>
@@ -247,3 +353,8 @@ export async function renderReelBackground(coin, data) {
   const { full } = await renderReelLayers(coin, data);
   return full;
 }
+
+// Se exporta tambien para que el script que arma la descripcion del Reel
+// pueda mencionar el mismo soporte/resistencia y la misma zona VI que se
+// dibujan en el video (un solo calculo, sin duplicar logica).
+export { computeChartInsights, formatUSD };

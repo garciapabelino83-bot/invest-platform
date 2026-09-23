@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { writeFile, mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { renderReelLayers } from "./render-reel-background.mjs";
+import { renderReelLayers, computeChartInsights } from "./render-reel-background.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -46,14 +46,28 @@ async function fetchAnalysis(coinId) {
   return res.json();
 }
 
+// Los mismos soporte/resistencia y la misma zona de Volume Imbalance que
+// se dibujan en el video se mencionan aqui en la descripcion, usando el
+// mismo calculo (computeChartInsights) para que el texto y el video
+// nunca queden desincronizados.
 function buildCaption(coin, data) {
   const price = formatUSD(data.currentPrice);
   const rsiTxt = data.rsiSignal ? `RSI ${data.rsi} (${data.rsiSignal})` : "";
   const trendTxt = data.trend ? `Tendencia ${data.trend}` : "";
 
+  const history = Array.isArray(data.history) ? data.history.slice(-30) : [];
+  const insights = computeChartInsights(history);
+  const levelsTxt =
+    insights.support !== null && insights.resistance !== null
+      ? `Soporte ${formatUSD(insights.support)} | Resistencia ${formatUSD(insights.resistance)}`
+      : "";
+  const viTxt = insights.vi ? `Zona de Volume Imbalance (VI) con sesgo ${insights.vi.bias}` : "";
+
   return [
     `${coin.name} (${coin.symbol}) hoy: ${price}`,
     [rsiTxt, trendTxt].filter(Boolean).join(" | "),
+    levelsTxt,
+    viTxt,
     "",
     "Analisis tecnico gratis de +45 criptomonedas en InvestPanel:",
     SITE_URL,
