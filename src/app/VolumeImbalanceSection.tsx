@@ -143,7 +143,7 @@ export default function VolumeImbalanceSection({ locked }: VolumeImbalanceSectio
               </p>
             </div>
             <a
-              href="/pricing"
+              href="#plan-pro"
               className="bg-[#0ecb81] hover:opacity-90 text-black transition text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center justify-center"
             >
               Desbloquear Plan Pro — $9.99/mes
