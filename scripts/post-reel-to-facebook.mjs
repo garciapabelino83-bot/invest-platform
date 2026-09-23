@@ -36,6 +36,15 @@ const COINS = [
 ];
 
 function pickCoinOfTheDay() {
+  // Permite forzar una moneda especifica (por ejemplo, para probar un
+  // cambio de diseno con Bitcoin) sin alterar la rotacion diaria normal.
+  const forced = (process.env.FORCE_COIN || "").trim().toLowerCase();
+  if (forced) {
+    const match = COINS.find((c) => c.id.toLowerCase() === forced);
+    if (match) return match;
+    console.warn(`FORCE_COIN="${forced}" no coincide con ninguna moneda conocida, se ignora.`);
+  }
+
   const start = new Date(Date.UTC(new Date().getUTCFullYear(), 0, 0));
   const dayOfYear = Math.floor((Date.now() - start.getTime()) / 86400000);
   return COINS[dayOfYear % COINS.length];
