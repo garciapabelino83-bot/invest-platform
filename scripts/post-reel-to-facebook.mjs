@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { writeFile, mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,6 +11,13 @@ const PAGE_ID = process.env.FB_PAGE_ID || "1361643533693650";
 const ACCESS_TOKEN = process.env.FB_PAGE_ACCESS_TOKEN;
 const SITE_URL = "https://invest-platform-chi.vercel.app";
 const GRAPH_VERSION = "v21.0";
+
+// Motor de voz (Piper TTS, offline y sin costo): el binario y el modelo de
+// voz en español se descargan en el workflow de GitHub Actions y quedan
+// disponibles en estas rutas (configurables via variables de entorno para
+// poder probar en otra maquina).
+const PIPER_BIN = process.env.PIPER_BIN || "piper";
+const PIPER_MODEL = process.env.PIPER_MODEL || "piper-voices/es_MX-claude-high.onnx";
 
 if (!ACCESS_TOKEN) {
   console.error("Falta la variable FB_PAGE_ACCESS_TOKEN");
@@ -78,28 +85,114 @@ function buildCaption(coin, data) {
     .join("\n");
 }
 
+// Lee un monto en dolares de forma natural hablada ("114 dolares con 41
+// centavos"), en vez de dejar que el sintetizador de voz intente adivinar
+// como leer el simbolo "$" y el punto decimal.
+function formatSpokenUSD(n) {
+  if (n === null || n === undefined) return "";
+  if (n < 1) return `${n.toFixed(4)} dolares`;
+  const dollars = Math.floor(n);
+  const cents = Math.round((n - dollars) * 100);
+  return cents > 0 ? `${dollars} dolares con ${cents} centavos` : `${dollars} dolares`;
+}
+
+// Texto que se manda al sintetizador de voz: usa el mismo calculo de
+// soporte/resistencia/VI que la descripcion (computeChartInsights), para
+// que lo que se dice en el audio nunca se desincronice de lo que se ve en
+// el grafico ni de lo que dice el texto del post.
+function buildNarrationText(coin, data) {
+  const history = Array.isArray(data.history) ? data.history.slice(-30) : [];
+  const insights = computeChartInsights(history);
+
+  const frases = [`Analisis de ${coin.name}. Precio actual: ${formatSpokenUSD(data.currentPrice)}.`];
+
+  if (data.rsi != null && data.rsiSignal) {
+    frases.push(`El RSI esta en ${Math.round(data.rsi)}, en zona ${data.rsiSignal}.`);
+  }
+  if (data.trend) {
+    frases.push(`La tendencia es ${data.trend}.`);
+  }
+  if (insights.support !== null && insights.resistance !== null) {
+    frases.push(
+      `Soporte cercano en ${formatSpokenUSD(insights.support)}, y resistencia en ${formatSpokenUSD(
+        insights.resistance
+      )}.`
+    );
+  }
+  if (insights.vi) {
+    frases.push(`Se detecto una zona de volumen desequilibrado, con sesgo ${insights.vi.bias}.`);
+  }
+  frases.push("Mas analisis tecnico gratis en InvestPanel.");
+
+  return frases.join(" ");
+}
+
+// Genera el audio de la narracion con Piper TTS (voz neuronal offline, sin
+// costo y sin depender de un servicio externo en vivo). Se le manda el
+// texto por stdin, tal como espera el binario de piper.
+function synthesizeNarration(text, outWavPath) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(PIPER_BIN, [
+      "--model", PIPER_MODEL,
+      "--output_file", outWavPath,
+      "--length_scale", "1.05",
+      "--sentence_silence", "0.35",
+    ]);
+
+    let stderr = "";
+    proc.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    proc.on("error", reject);
+    proc.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Piper (voz) termino con codigo ${code}: ${stderr}`));
+    });
+
+    proc.stdin.write(text);
+    proc.stdin.end();
+  });
+}
+
+async function getAudioDurationSec(filePath) {
+  const { stdout } = await execFileAsync("ffprobe", [
+    "-v", "error",
+    "-show_entries", "format=duration",
+    "-of", "default=noprint_wrappers=1:nokey=1",
+    filePath,
+  ]);
+  const seconds = parseFloat(stdout.trim());
+  return Number.isFinite(seconds) ? seconds : 0;
+}
+
 // Convierte las dos capas de fondo (sin velas / con velas) en un video
-// vertical de 30s: primero revela el grafico de velas de izquierda a
-// derecha (como si se fuera dibujando y las velas fueran subiendo y
-// bajando), despues aplica un zoom que "respira" (entra y sale
-// suavemente) durante todo el video mas un flash de luz al inicio para
-// llamar la atencion, y por ultimo una pista de audio generada por
-// sintesis (sin usar musica con derechos de autor): un colchon ambiental
-// de fondo suave mas una campanita tipo "alerta de mercado" con
-// envolvente natural (sin distorsion ni recortes agresivos de volumen),
-// cumpliendo los requisitos tecnicos de Reels (mp4, h264, aac, 9:16).
-async function buildReelVideo(layers, outPath) {
+// vertical: primero revela el grafico de velas de izquierda a derecha
+// (como si se fuera dibujando y las velas fueran subiendo y bajando),
+// despues aplica un zoom que "respira" (entra y sale suavemente) durante
+// todo el video mas un flash de luz al inicio para llamar la atencion, y
+// por ultimo mezcla el audio: la narracion de voz (Piper TTS, generada
+// aparte) como pista principal, mas un colchon ambiental de fondo muy
+// suave y una campanita institucional breve antes de que empiece a
+// hablar la voz — cumpliendo los requisitos tecnicos de Reels (mp4,
+// h264, aac, 9:16). La duracion total se ajusta a lo que dura la
+// narracion (con un minimo y un maximo razonables) para que la voz nunca
+// quede cortada ni el video se sienta vacio si el texto es corto.
+async function buildReelVideo(layers, narrationPath, outPath) {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "reel-"));
   const emptyPath = path.join(tmpDir, "bg-empty.png");
   const fullPath = path.join(tmpDir, "bg-full.png");
   await Promise.all([writeFile(emptyPath, layers.empty), writeFile(fullPath, layers.full)]);
 
-  const durationSec = 30;
   const fps = 30;
-  const totalFrames = durationSec * fps;
   const sr = 48000;
-  const midMs = Math.round((durationSec / 2) * 1000);
-  const revealSec = 9;
+  const introSec = 0.8;
+  const outroPadSec = 1.5;
+
+  const narrationSec = await getAudioDurationSec(narrationPath);
+  const durationSec = Math.min(32, Math.max(18, Math.round(introSec + narrationSec + outroPadSec)));
+  const totalFrames = durationSec * fps;
+  const introMs = Math.round(introSec * 1000);
+  const revealSec = Math.min(9, durationSec - 4);
   const zoomExpr = "1.05+0.12*(0.5+0.5*sin(2*PI*on/150))";
 
   // Nota: el zoom ("zoompan") hay que aplicarlo ANTES de mezclar las dos
@@ -129,7 +222,8 @@ async function buildReelVideo(layers, outPath) {
 
   // "Campana" con varios armonicos (cada uno con su propia caida
   // exponencial), para que suene a campana institucional/de bolsa de
-  // verdad en vez de un pitido sintetico de un solo tono.
+  // verdad en vez de un pitido sintetico de un solo tono. Solo se usa una
+  // vez, justo antes de que entre la voz.
   const bellExpr = (f) =>
     `0.55*exp(-3.2*t)*sin(2*PI*${f}*t)+` +
     `0.30*exp(-5.5*t)*sin(2*PI*${(f * 2.01).toFixed(2)}*t)+` +
@@ -138,18 +232,18 @@ async function buildReelVideo(layers, outPath) {
   const bell = (freq, dur) => `aevalsrc=exprs='${bellExpr(freq)}':s=${sr}:d=${dur}`;
 
   const audioFilters = [
-    // Colchon ambiental de fondo (dos tonos graves en quinta, volumen bajo, con entrada/salida suave)
-    `[2:a]afade=t=in:st=0:d=1,afade=t=out:st=${durationSec - 1.5}:d=1.5,volume=0.05[pad1]`,
-    `[3:a]afade=t=in:st=0:d=1,afade=t=out:st=${durationSec - 1.5}:d=1.5,volume=0.04[pad2]`,
-    // "Ding-dong" institucional al inicio (como una campana de bolsa/oficina)
-    `[4:a]afade=t=out:st=2.4:d=0.1,volume=0.85[bA]`,
-    `[5:a]afade=t=out:st=2.4:d=0.1,adelay=450,volume=0.85[bB]`,
-    // Un segundo toque de campana a mitad del video, para refrescar la atencion sin sobresaltar
-    `[6:a]afade=t=out:st=1.9:d=0.1,adelay=${midMs},volume=0.7[mid]`,
-    `[pad1][pad2][bA][bB][mid]amix=inputs=5:duration=longest:normalize=0[amixed]`,
+    // Colchon ambiental de fondo, bien discreto para no competir con la voz
+    `[2:a]afade=t=in:st=0:d=1,afade=t=out:st=${durationSec - 1.5}:d=1.5,volume=0.035[pad1]`,
+    `[3:a]afade=t=in:st=0:d=1,afade=t=out:st=${durationSec - 1.5}:d=1.5,volume=0.028[pad2]`,
+    // Campanita institucional breve, justo antes de que arranque la narracion
+    `[4:a]afade=t=out:st=0.55:d=0.15,volume=0.8[bell]`,
+    // Narracion de voz (Piper TTS): se reescala a la frecuencia del
+    // proyecto y se retrasa lo mismo que tarda la campanita en sonar
+    `[5:a]aresample=${sr},adelay=${introMs}:all=1,volume=1.6[voice]`,
+    `[pad1][pad2][bell][voice]amix=inputs=4:duration=longest:normalize=0[amixed]`,
     // Solo un limitador suave como red de seguridad (sin compresor ni
     // normalizador agresivo, que fue lo que distorsionaba el sonido)
-    `[amixed]afade=t=in:st=0:d=0.3,afade=t=out:st=${(durationSec - 0.8).toFixed(1)}:d=0.8,alimiter=limit=0.95,pan=stereo|c0=c0|c1=c0[a]`,
+    `[amixed]afade=t=in:st=0:d=0.2,afade=t=out:st=${(durationSec - 0.8).toFixed(1)}:d=0.8,alimiter=limit=0.95,pan=stereo|c0=c0|c1=c0[a]`,
   ].join(";");
 
   const args = [
@@ -161,8 +255,7 @@ async function buildReelVideo(layers, outPath) {
     "-f", "lavfi", "-i", tone(130.81, durationSec),
     "-f", "lavfi", "-i", tone(196.00, durationSec),
     "-f", "lavfi", "-i", bell(659.25, 2.5),
-    "-f", "lavfi", "-i", bell(523.25, 2.5),
-    "-f", "lavfi", "-i", bell(587.33, 2.0),
+    "-i", narrationPath,
     "-filter_complex", `${videoFilter};${audioFilters}`,
     "-map", "[v]",
     "-map", "[a]",
@@ -173,7 +266,6 @@ async function buildReelVideo(layers, outPath) {
     "-c:a", "aac",
     "-b:a", "128k",
     "-ar", String(sr),
-    "-shortest",
     outPath,
   ];
 
@@ -249,10 +341,16 @@ async function main() {
   const layers = await renderReelLayers(coin, data);
   console.log(`Fondo generado (vacio: ${layers.empty.length} bytes, completo: ${layers.full.length} bytes)`);
 
+  const narrationText = buildNarrationText(coin, data);
+  console.log("Narracion:\n" + narrationText);
+  const narrationPath = path.join(tmpdir(), `narracion-${coin.id}-${Date.now()}.wav`);
+  await synthesizeNarration(narrationText, narrationPath);
+
   const outPath = path.join(tmpdir(), `reel-${coin.id}-${Date.now()}.mp4`);
-  await buildReelVideo(layers, outPath);
+  await buildReelVideo(layers, narrationPath, outPath);
   const videoBuffer = await readFile(outPath);
   console.log(`Video generado (${(videoBuffer.length / 1024 / 1024).toFixed(2)} MB)`);
+  await rm(narrationPath, { force: true });
 
   const { video_id, upload_url } = await startReelUpload();
   console.log("Sesion de subida creada. video_id:", video_id);
