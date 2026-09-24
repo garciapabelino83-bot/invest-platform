@@ -222,12 +222,16 @@ async function buildReelVideo(layers, narrationPath, outPath) {
     `[z0t][z1t]xfade=transition=wiperight:duration=${revealSec}:offset=0[composited];` +
     `[composited]eq=eval=frame:brightness='if(lt(t,0.3),0.30*(1-t/0.3),0)',format=yuv420p[v]`;
 
-  // Nota: usamos "aevalsrc" (no el filtro "sine") para generar los tonos,
+  // Nota: usamos "aevalsrc" (no el filtro "sine") para generar la campana,
   // porque "sine" en este ffmpeg sale a un volumen interno muy bajo por
   // defecto (sin forma de subirlo), lo que hacia que todo el audio
   // quedara casi inaudible sin importar los multiplicadores de volumen.
-  // Con "aevalsrc" controlamos la amplitud real de cada tono.
-  const tone = (freq, dur) => `aevalsrc=exprs='sin(2*PI*${freq}*t)':s=${sr}:d=${dur}`;
+  // Con "aevalsrc" controlamos la amplitud real del tono.
+  //
+  // Se quito el "colchon ambiental" de dos tonos sostenidos (sonaba como
+  // un zumbido/pitido molesto de fondo durante todo el video, segun
+  // reporto un usuario) — ahora el audio es solo la campanita breve al
+  // inicio mas la voz, sin ningun tono continuo de fondo.
 
   // "Campana" con varios armonicos (cada uno con su propia caida
   // exponencial), para que suene a campana institucional/de bolsa de
@@ -241,15 +245,12 @@ async function buildReelVideo(layers, narrationPath, outPath) {
   const bell = (freq, dur) => `aevalsrc=exprs='${bellExpr(freq)}':s=${sr}:d=${dur}`;
 
   const audioFilters = [
-    // Colchon ambiental de fondo, bien discreto para no competir con la voz
-    `[2:a]afade=t=in:st=0:d=1,afade=t=out:st=${durationSec - 1.5}:d=1.5,volume=0.035[pad1]`,
-    `[3:a]afade=t=in:st=0:d=1,afade=t=out:st=${durationSec - 1.5}:d=1.5,volume=0.028[pad2]`,
     // Campanita institucional breve, justo antes de que arranque la narracion
-    `[4:a]afade=t=out:st=0.55:d=0.15,volume=0.8[bell]`,
+    `[2:a]afade=t=out:st=0.55:d=0.15,volume=0.8[bell]`,
     // Narracion de voz (Piper TTS): se reescala a la frecuencia del
     // proyecto y se retrasa lo mismo que tarda la campanita en sonar
-    `[5:a]aresample=${sr},adelay=${introMs}:all=1,volume=1.6[voice]`,
-    `[pad1][pad2][bell][voice]amix=inputs=4:duration=longest:normalize=0[amixed]`,
+    `[3:a]aresample=${sr},adelay=${introMs}:all=1,volume=1.6[voice]`,
+    `[bell][voice]amix=inputs=2:duration=longest:normalize=0[amixed]`,
     // Solo un limitador suave como red de seguridad (sin compresor ni
     // normalizador agresivo, que fue lo que distorsionaba el sonido)
     `[amixed]afade=t=in:st=0:d=0.2,afade=t=out:st=${(durationSec - 0.8).toFixed(1)}:d=0.8,alimiter=limit=0.95,pan=stereo|c0=c0|c1=c0[a]`,
@@ -261,8 +262,6 @@ async function buildReelVideo(layers, narrationPath, outPath) {
     "-i", emptyPath,
     "-loop", "1",
     "-i", fullPath,
-    "-f", "lavfi", "-i", tone(130.81, durationSec),
-    "-f", "lavfi", "-i", tone(196.00, durationSec),
     "-f", "lavfi", "-i", bell(659.25, 2.5),
     "-i", narrationPath,
     "-filter_complex", `${videoFilter};${audioFilters}`,
@@ -325,7 +324,12 @@ async function finishReelUpload(videoId, caption) {
   });
 }
 
-async function waitUntilProcessed(videoId, { tries = 20, delayMs = 6000 } = {}) {
+// Se subio el limite de espera (antes 20 intentos x 6s = 2 minutos) porque
+// varios Reels se estaban publicando ANTES de que Facebook terminara de
+// procesar el video, y quedaban pegados mostrando solo la primera foto fija
+// para siempre en vez de reproducirse. Ahora se espera hasta unos 6-7
+// minutos, tiempo de sobra dentro del workflow de GitHub Actions.
+async function waitUntilProcessed(videoId, { tries = 50, delayMs = 8000 } = {}) {
   for (let i = 0; i < tries; i++) {
     const res = await fetch(
       `https://graph.facebook.com/${GRAPH_VERSION}/${videoId}?fields=status&access_token=${ACCESS_TOKEN}`
