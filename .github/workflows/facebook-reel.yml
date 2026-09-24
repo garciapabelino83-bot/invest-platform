@@ -47,7 +47,7 @@ jobs:
           path: |
             piper
             piper-voices
-          key: piper-tts-es_MX-claude-high-v1
+          key: piper-tts-es_ES-davefx-medium-v1
 
       - name: Descargar Piper TTS (motor de voz, offline y gratuito)
         run: |
@@ -58,11 +58,11 @@ jobs:
             tar -xzf piper.tar.gz -C piper --strip-components=1
             rm piper.tar.gz
           fi
-          if [ ! -s piper-voices/es_MX-claude-high.onnx ]; then
-            curl -sL -o piper-voices/es_MX-claude-high.onnx "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/claude/high/es_MX-claude-high.onnx?download=true"
+          if [ ! -s piper-voices/es_ES-davefx-medium.onnx ]; then
+            curl -sL -o piper-voices/es_ES-davefx-medium.onnx "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/davefx/medium/es_ES-davefx-medium.onnx?download=true"
           fi
-          if [ ! -s piper-voices/es_MX-claude-high.onnx.json ]; then
-            curl -sL -o piper-voices/es_MX-claude-high.onnx.json "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/claude/high/es_MX-claude-high.onnx.json?download=true"
+          if [ ! -s piper-voices/es_ES-davefx-medium.onnx.json ]; then
+            curl -sL -o piper-voices/es_ES-davefx-medium.onnx.json "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/davefx/medium/es_ES-davefx-medium.onnx.json?download=true"
           fi
           ls -la piper piper-voices
 
@@ -71,7 +71,7 @@ jobs:
           FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
           FB_PAGE_ID: "1361643533693650"
           PIPER_BIN: ${{ github.workspace }}/piper/piper
-          PIPER_MODEL: ${{ github.workspace }}/piper-voices/es_MX-claude-high.onnx
+          PIPER_MODEL: ${{ github.workspace }}/piper-voices/es_ES-davefx-medium.onnx
           LD_LIBRARY_PATH: ${{ github.workspace }}/piper
           FORCE_COIN: ${{ github.event.inputs.coin }}
         run: node scripts/post-reel-to-facebook.mjs
