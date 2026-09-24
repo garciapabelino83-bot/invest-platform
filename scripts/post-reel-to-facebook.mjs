@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { writeFile, mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { renderReelLayers, computeChartInsights } from "./render-reel-background.mjs";
+import { renderReelStages, computeChartInsights } from "./render-reel-background.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -15,9 +15,11 @@ const GRAPH_VERSION = "v21.0";
 // Motor de voz (Piper TTS, offline y sin costo): el binario y el modelo de
 // voz en español se descargan en el workflow de GitHub Actions y quedan
 // disponibles en estas rutas (configurables via variables de entorno para
-// poder probar en otra maquina).
+// poder probar en otra maquina). Se cambio a una voz masculina
+// (es_ES-davefx-medium) porque la anterior (es_MX-claude-high) no era la
+// que se queria para el Reel.
 const PIPER_BIN = process.env.PIPER_BIN || "piper";
-const PIPER_MODEL = process.env.PIPER_MODEL || "piper-voices/es_MX-claude-high.onnx";
+const PIPER_MODEL = process.env.PIPER_MODEL || "piper-voices/es_ES-davefx-medium.onnx";
 
 if (!ACCESS_TOKEN) {
   console.error("Falta la variable FB_PAGE_ACCESS_TOKEN");
@@ -105,35 +107,81 @@ function formatSpokenUSD(n) {
   return cents > 0 ? `${dollars} dolares con ${cents} centavos` : `${dollars} dolares`;
 }
 
-// Texto que se manda al sintetizador de voz: usa el mismo calculo de
-// soporte/resistencia/VI que la descripcion (computeChartInsights), para
-// que lo que se dice en el audio nunca se desincronice de lo que se ve en
-// el grafico ni de lo que dice el texto del post.
-function buildNarrationText(coin, data) {
-  const history = Array.isArray(data.history) ? data.history.slice(-30) : [];
-  const insights = computeChartInsights(history);
+// Construye la narracion como una lista de PASOS (no un solo bloque de
+// texto), para poder explicar el grafico igual que lo haria una persona:
+// primero el precio, despues cada pieza de la estructura SMC en el mismo
+// orden en que se va a ir revelando en el video (etiqueta "stage" en cada
+// paso). El script que arma el video (buildReelVideo) usa esas mismas
+// etiquetas para saber, de forma aproximada, en que momento del audio
+// debe aparecer cada elemento nuevo en pantalla.
+function buildNarrationSegments(coin, data, structure, insights) {
+  const steps = [];
 
-  const frases = [`Analisis de ${coin.name}. Precio actual: ${formatSpokenUSD(data.currentPrice)}.`];
-
+  steps.push({
+    stage: "candles",
+    text: `Analisis de ${coin.name}. Precio actual: ${formatSpokenUSD(data.currentPrice)}.`,
+  });
   if (data.rsi != null && data.rsiSignal) {
-    frases.push(`El RSI esta en ${Math.round(data.rsi)}, en zona ${data.rsiSignal}.`);
+    steps.push({ stage: "candles", text: `El RSI esta en ${Math.round(data.rsi)}, en zona ${data.rsiSignal}.` });
   }
   if (data.trend) {
-    frases.push(`La tendencia es ${data.trend}.`);
+    steps.push({ stage: "candles", text: `La tendencia general es ${data.trend}.` });
   }
-  if (insights.support !== null && insights.resistance !== null) {
-    frases.push(
-      `Soporte cercano en ${formatSpokenUSD(insights.support)}, y resistencia en ${formatSpokenUSD(
-        insights.resistance
-      )}.`
-    );
-  }
-  if (insights.vi) {
-    frases.push(`Se detecto una zona de volumen desequilibrado, con sesgo ${insights.vi.bias}.`);
-  }
-  frases.push("Mas analisis tecnico gratis en InvestPanel.");
 
-  return frases.join(" ");
+  if (structure) {
+    const biasWord = structure.bias === "alcista" ? "alcista" : "bajista";
+    steps.push({
+      stage: "bos",
+      text: `Miremos la estructura del mercado. El precio rompio un nivel anterior, esto se conoce como B, O, S, con sesgo ${biasWord}, cerca de ${formatSpokenUSD(
+        structure.bos.price
+      )}.`,
+    });
+
+    const zoneWord = structure.bias === "alcista" ? "zona de demanda" : "zona de oferta";
+    steps.push({
+      stage: "zones",
+      text: `Justo antes de ese movimiento se formo un Order Block, la ${zoneWord}, entre ${formatSpokenUSD(
+        structure.orderBlock.bottom
+      )} y ${formatSpokenUSD(structure.orderBlock.top)}.`,
+    });
+
+    steps.push({
+      stage: "liquidity",
+      text: `Mas alla de esa zona hay liquidez acumulada cerca de ${formatSpokenUSD(
+        structure.liquidity.price
+      )}, un nivel que el precio todavia no ha tocado.`,
+    });
+
+    const rrText =
+      structure.entry.rr !== null
+        ? `, con una relacion riesgo beneficio de ${structure.entry.rr.toFixed(1)} a uno`
+        : "";
+    steps.push({
+      stage: "full",
+      text: `La entrada estaria cerca de ${formatSpokenUSD(
+        structure.entry.entryPrice
+      )}, buscando un objetivo en ${formatSpokenUSD(structure.entry.targetPrice)}${rrText}.`,
+    });
+  } else {
+    if (insights.support !== null && insights.resistance !== null) {
+      steps.push({
+        stage: "full",
+        text: `Soporte cercano en ${formatSpokenUSD(insights.support)}, y resistencia en ${formatSpokenUSD(
+          insights.resistance
+        )}.`,
+      });
+    }
+    if (insights.vi) {
+      steps.push({
+        stage: "full",
+        text: `Tambien se detecto una zona de volumen desequilibrado, con sesgo ${insights.vi.bias}.`,
+      });
+    }
+  }
+
+  steps.push({ stage: "full", text: "Recuerda: esto no es asesoria financiera. Mas analisis tecnico gratis en InvestPanel." });
+
+  return steps;
 }
 
 // Genera el audio de la narracion con Piper TTS (voz neuronal offline, sin
@@ -144,8 +192,11 @@ function synthesizeNarration(text, outWavPath) {
     const proc = spawn(PIPER_BIN, [
       "--model", PIPER_MODEL,
       "--output_file", outWavPath,
-      "--length_scale", "1.05",
-      "--sentence_silence", "0.35",
+      // Se bajo la velocidad (length_scale mas alto = mas lento) y se
+      // alargo la pausa entre frases para que la narracion se sienta como
+      // una explicacion paso a paso, no una lectura apurada.
+      "--length_scale", "1.3",
+      "--sentence_silence", "0.5",
     ]);
 
     let stderr = "";
@@ -174,53 +225,144 @@ async function getAudioDurationSec(filePath) {
   return Number.isFinite(seconds) ? seconds : 0;
 }
 
-// Convierte las dos capas de fondo (sin velas / con velas) en un video
-// vertical: primero revela el grafico de velas de izquierda a derecha
-// (como si se fuera dibujando y las velas fueran subiendo y bajando),
-// despues aplica un zoom que "respira" (entra y sale suavemente) durante
-// todo el video mas un flash de luz al inicio para llamar la atencion, y
-// por ultimo mezcla el audio: la narracion de voz (Piper TTS, generada
-// aparte) como pista principal, mas un colchon ambiental de fondo muy
-// suave y una campanita institucional breve antes de que empiece a
-// hablar la voz — cumpliendo los requisitos tecnicos de Reels (mp4,
-// h264, aac, 9:16). La duracion total se ajusta a lo que dura la
-// narracion (con un minimo y un maximo razonables) para que la voz nunca
-// quede cortada ni el video se sienta vacio si el texto es corto.
-async function buildReelVideo(layers, narrationPath, outPath) {
+// Calcula, de forma aproximada, en que segundo del video deberia
+// aparecer cada etapa nueva (bos, zones, liquidity, full), basandose en
+// cuantas palabras de la narracion ya se dijeron antes de esa etapa
+// (Piper habla a un ritmo bastante parejo, asi que repartir el tiempo
+// segun la cantidad de palabras es una buena aproximacion sin tener que
+// sintetizar cada frase por separado). "candles" siempre empieza en el
+// segundo 0 (el grafico se revela de una vez, antes incluso de que
+// termine de sonar la campanita).
+function computeStageStartTimes(segments, introSec, narrationSec) {
+  const wordCounts = segments.map((s) => s.text.trim().split(/\s+/).filter(Boolean).length || 1);
+  const totalWords = wordCounts.reduce((a, b) => a + b, 0) || 1;
+
+  const starts = { candles: 0 };
+  let cumWords = 0;
+  segments.forEach((seg, i) => {
+    const startFrac = cumWords / totalWords;
+    if (!(seg.stage in starts)) {
+      starts[seg.stage] = seg.stage === "candles" ? 0 : introSec + startFrac * narrationSec;
+    }
+    cumWords += wordCounts[i];
+  });
+
+  return starts;
+}
+
+// Arma el video vertical revelando cada etapa de la estructura SMC UNA
+// POR UNA, mas o menos al mismo tiempo en que la narracion la va
+// explicando: el grafico se dibuja una sola vez al inicio (velas solas),
+// se queda QUIETO mientras se habla de el, y solo se mueve con un
+// pequeno "salto" de zoom cada vez que aparece un elemento nuevo (BOS,
+// Order Block, Liquidez, flecha de entrada) — ya no hay un zoom
+// continuo "respirando" durante todo el video. Al final se mezcla el
+// audio: la narracion de voz (Piper TTS) como pista principal, mas una
+// campanita institucional breve antes de que empiece a hablar —
+// cumpliendo los requisitos tecnicos de Reels (mp4, h264, aac, 9:16). La
+// duracion total se ajusta a lo que dura la narracion (con un minimo y
+// un maximo razonables) para que la voz nunca quede cortada.
+async function buildReelVideo(stages, segments, narrationPath, outPath) {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "reel-"));
-  const emptyPath = path.join(tmpDir, "bg-empty.png");
-  const fullPath = path.join(tmpDir, "bg-full.png");
-  await Promise.all([writeFile(emptyPath, layers.empty), writeFile(fullPath, layers.full)]);
 
   const fps = 30;
   const sr = 48000;
   const introSec = 0.8;
   const outroPadSec = 1.5;
+  const pulseSec = 0.6;
+  const pulseAmount = 0.05;
 
   const narrationSec = await getAudioDurationSec(narrationPath);
   const durationSec = Math.min(32, Math.max(18, Math.round(introSec + narrationSec + outroPadSec)));
-  const totalFrames = durationSec * fps;
   const introMs = Math.round(introSec * 1000);
-  const revealSec = Math.min(9, durationSec - 4);
-  const zoomExpr = "1.05+0.12*(0.5+0.5*sin(2*PI*on/150))";
 
-  // Nota: el zoom ("zoompan") hay que aplicarlo ANTES de mezclar las dos
-  // capas, no despues sobre el video ya compuesto — zoompan esta pensado
-  // para una sola imagen fija en loop, y si se le da un video que ya
-  // cambia con el tiempo (la revelacion de las velas) se queda pegado en
-  // el primer frame. Por eso: primero se le aplica el mismo zoom a cada
-  // capa por separado (quedan sincronizadas porque el zoom depende solo
-  // del numero de frame, no del contenido), y despues se revela la capa
-  // "completa" (con velas) de izquierda a derecha sobre la capa "vacia"
-  // (cuadricula) ya con el zoom aplicado, simulando que el grafico se
-  // dibuja y las velas van subiendo y bajando.
-  const videoFilter =
-    `[0:v]zoompan=z='${zoomExpr}':d=${totalFrames}:s=1080x1920:fps=${fps}[z0];` +
-    `[1:v]zoompan=z='${zoomExpr}':d=${totalFrames}:s=1080x1920:fps=${fps}[z1];` +
-    `[z0]trim=duration=${revealSec},setpts=PTS-STARTPTS[z0t];` +
-    `[z1]trim=duration=${durationSec},setpts=PTS-STARTPTS[z1t];` +
-    `[z0t][z1t]xfade=transition=wiperight:duration=${revealSec}:offset=0[composited];` +
-    `[composited]eq=eval=frame:brightness='if(lt(t,0.3),0.30*(1-t/0.3),0)',format=yuv420p[v]`;
+  const stageOrder = ["candles", "bos", "zones", "liquidity", "full"];
+  const starts = computeStageStartTimes(segments, introSec, narrationSec);
+  const presentStages = stageOrder.filter((name) => name in starts && name in stages.images);
+
+  // Duracion de cada etapa: desde su inicio hasta el inicio de la
+  // siguiente, y la ultima hasta el final del video. Se fuerza un minimo
+  // de 0.4s por etapa para que ffmpeg nunca reciba un clip de largo cero.
+  const stagesTimeline = presentStages.map((name, i) => {
+    const start = starts[name];
+    const nextStart = i + 1 < presentStages.length ? starts[presentStages[i + 1]] : durationSec;
+    const duration = Math.max(0.4, nextStart - start);
+    return { name, duration };
+  });
+
+  const candlesDuration = stagesTimeline[0].duration;
+  const introRevealSec = Math.max(Math.min(0.3, candlesDuration), Math.min(1.0, candlesDuration * 0.6));
+  const candlesHoldDur = Math.max(0, candlesDuration - introRevealSec);
+
+  // Escribe a disco solo las imagenes que realmente se van a usar:
+  // "empty" (para la revelacion inicial) mas cada etapa presente.
+  const videoInputs = ["empty", ...presentStages];
+  const imagePaths = {};
+  await Promise.all(
+    videoInputs.map(async (name) => {
+      const p = path.join(tmpDir, `stage-${name}.png`);
+      await writeFile(p, stages.images[name]);
+      imagePaths[name] = p;
+    })
+  );
+  const inputIndex = (name) => videoInputs.indexOf(name);
+
+  const segFilters = [];
+  const segLabels = [];
+
+  // Revelacion inicial: de la cuadricula vacia a las velas, de izquierda
+  // a derecha, muy al principio del video.
+  segFilters.push(
+    `[${inputIndex("empty")}:v]fps=${fps},scale=1080:1920,trim=duration=${introRevealSec.toFixed(
+      3
+    )},setpts=PTS-STARTPTS[introA]`
+  );
+  segFilters.push(
+    `[${inputIndex("candles")}:v]fps=${fps},scale=1080:1920,trim=duration=${introRevealSec.toFixed(
+      3
+    )},setpts=PTS-STARTPTS[introB]`
+  );
+  segFilters.push(
+    `[introA][introB]xfade=transition=wiperight:duration=${introRevealSec.toFixed(3)}:offset=0[segIntro]`
+  );
+  segLabels.push("segIntro");
+
+  // El resto del tiempo de "candles" (si queda) se ve quieto, sin zoom,
+  // mientras la voz habla del precio, el RSI y la tendencia.
+  if (candlesHoldDur > 0.05) {
+    segFilters.push(
+      `[${inputIndex("candles")}:v]fps=${fps},scale=1080:1920,trim=duration=${candlesHoldDur.toFixed(
+        3
+      )},setpts=PTS-STARTPTS[segCandlesHold]`
+    );
+    segLabels.push("segCandlesHold");
+  }
+
+  // Cada etapa siguiente (bos, zones, liquidity, full) se queda quieta
+  // durante todo su tiempo, salvo un pequeno "salto" de zoom justo al
+  // aparecer, para que se note que algo nuevo se dibujo sin que el
+  // grafico este todo el tiempo moviendose.
+  for (let i = 1; i < stagesTimeline.length; i++) {
+    const stage = stagesTimeline[i];
+    const totalFrames = Math.max(1, Math.round(stage.duration * fps));
+    const pulseFrames = Math.max(1, Math.min(Math.round(pulseSec * fps), totalFrames));
+    const zExpr = `if(lte(on,${pulseFrames}),1.0+${pulseAmount}*sin(PI*on/${pulseFrames}),1.0)`;
+    const label = `seg_${stage.name}`;
+    segFilters.push(
+      `[${inputIndex(stage.name)}:v]zoompan=z='${zExpr}':d=${totalFrames}:s=1080x1920:fps=${fps},trim=duration=${stage.duration.toFixed(
+        3
+      )}[${label}]`
+    );
+    segLabels.push(label);
+  }
+
+  const concatInputs = segLabels.map((l) => `[${l}]`).join("");
+  segFilters.push(`${concatInputs}concat=n=${segLabels.length}:v=1:a=0[vraw]`);
+  segFilters.push(`[vraw]eq=eval=frame:brightness='if(lt(t,0.3),0.30*(1-t/0.3),0)',format=yuv420p[v]`);
+  const videoFilter = segFilters.join(";");
+
+  const bellIndex = videoInputs.length;
+  const narrationIndex = videoInputs.length + 1;
 
   // Nota: usamos "aevalsrc" (no el filtro "sine") para generar la campana,
   // porque "sine" en este ffmpeg sale a un volumen interno muy bajo por
@@ -246,24 +388,23 @@ async function buildReelVideo(layers, narrationPath, outPath) {
 
   const audioFilters = [
     // Campanita institucional breve, justo antes de que arranque la narracion
-    `[2:a]afade=t=out:st=0.55:d=0.15,volume=0.8[bell]`,
+    `[${bellIndex}:a]afade=t=out:st=0.55:d=0.15,volume=0.8[bell]`,
     // Narracion de voz (Piper TTS): se reescala a la frecuencia del
     // proyecto y se retrasa lo mismo que tarda la campanita en sonar
-    `[3:a]aresample=${sr},adelay=${introMs}:all=1,volume=1.6[voice]`,
+    `[${narrationIndex}:a]aresample=${sr},adelay=${introMs}:all=1,volume=1.6[voice]`,
     `[bell][voice]amix=inputs=2:duration=longest:normalize=0[amixed]`,
     // Solo un limitador suave como red de seguridad (sin compresor ni
     // normalizador agresivo, que fue lo que distorsionaba el sonido)
     `[amixed]afade=t=in:st=0:d=0.2,afade=t=out:st=${(durationSec - 0.8).toFixed(1)}:d=0.8,alimiter=limit=0.95,pan=stereo|c0=c0|c1=c0[a]`,
   ].join(";");
 
-  const args = [
-    "-y",
-    "-loop", "1",
-    "-i", emptyPath,
-    "-loop", "1",
-    "-i", fullPath,
-    "-f", "lavfi", "-i", bell(659.25, 2.5),
-    "-i", narrationPath,
+  const args = ["-y"];
+  for (const name of videoInputs) {
+    args.push("-loop", "1", "-i", imagePaths[name]);
+  }
+  args.push("-f", "lavfi", "-i", bell(659.25, 2.5));
+  args.push("-i", narrationPath);
+  args.push(
     "-filter_complex", `${videoFilter};${audioFilters}`,
     "-map", "[v]",
     "-map", "[a]",
@@ -274,8 +415,8 @@ async function buildReelVideo(layers, narrationPath, outPath) {
     "-c:a", "aac",
     "-b:a", "128k",
     "-ar", String(sr),
-    outPath,
-  ];
+    outPath
+  );
 
   await execFileAsync("ffmpeg", args);
   await rm(tmpDir, { recursive: true, force: true });
@@ -351,16 +492,20 @@ async function main() {
   const caption = buildCaption(coin, data);
   console.log("Descripcion:\n" + caption);
 
-  const layers = await renderReelLayers(coin, data);
-  console.log(`Fondo generado (vacio: ${layers.empty.length} bytes, completo: ${layers.full.length} bytes)`);
+  const stages = await renderReelStages(coin, data);
+  console.log(
+    `Etapas generadas (estructura SMC detectada: ${stages.hasStructure ? "si" : "no"}): ` +
+      Object.keys(stages.images).join(", ")
+  );
 
-  const narrationText = buildNarrationText(coin, data);
-  console.log("Narracion:\n" + narrationText);
+  const segments = buildNarrationSegments(coin, data, stages.structure, stages.insights);
+  const narrationText = segments.map((s) => s.text).join(" ");
+  console.log("Narracion (paso a paso):\n" + segments.map((s) => `[${s.stage}] ${s.text}`).join("\n"));
   const narrationPath = path.join(tmpdir(), `narracion-${coin.id}-${Date.now()}.wav`);
   await synthesizeNarration(narrationText, narrationPath);
 
   const outPath = path.join(tmpdir(), `reel-${coin.id}-${Date.now()}.mp4`);
-  await buildReelVideo(layers, narrationPath, outPath);
+  await buildReelVideo(stages, segments, narrationPath, outPath);
   const videoBuffer = await readFile(outPath);
   console.log(`Video generado (${(videoBuffer.length / 1024 / 1024).toFixed(2)} MB)`);
   await rm(narrationPath, { force: true });
