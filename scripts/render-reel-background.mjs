@@ -621,4 +621,25 @@ function buildCardSvg(coin, data, { withCandles }) {
 // Devuelve las dos variantes (PNG) que necesita el video: "empty" (sin
 // velas, para el instante inicial) y "full" (con las velas ya dibujadas,
 // que se revela progresivamente encima de la vacia).
-export async function
+export async function renderReelLayers(coin, data) {
+  const [emptySvg, fullSvg] = await Promise.all([
+    buildCardSvg(coin, data, { withCandles: false }),
+    buildCardSvg(coin, data, { withCandles: true }),
+  ]);
+  const [empty, full] = await Promise.all([
+    sharp(Buffer.from(emptySvg)).png().toBuffer(),
+    sharp(Buffer.from(fullSvg)).png().toBuffer(),
+  ]);
+  return { empty, full };
+}
+
+// Se mantiene por compatibilidad: la tarjeta completa (con velas) sola.
+export async function renderReelBackground(coin, data) {
+  const { full } = await renderReelLayers(coin, data);
+  return full;
+}
+
+// Se exporta tambien para que el script que arma la descripcion del Reel
+// pueda mencionar el mismo soporte/resistencia y la misma zona VI que se
+// dibujan en el video (un solo calculo, sin duplicar logica).
+export { computeChartInsights, formatUSD };
