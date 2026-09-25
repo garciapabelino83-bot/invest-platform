@@ -13,14 +13,22 @@ const ACCESS_TOKEN = process.env.FB_PAGE_ACCESS_TOKEN;
 const SITE_URL = "https://invest-platform-chi.vercel.app";
 const GRAPH_VERSION = "v21.0";
 
-// Motor de voz (Piper TTS, offline y sin costo): el binario y el modelo de
-// voz en español se descargan en el workflow de GitHub Actions y quedan
-// disponibles en estas rutas (configurables via variables de entorno para
-// poder probar en otra maquina). Se cambio a una voz masculina
-// (es_ES-davefx-medium) porque la anterior (es_MX-claude-high) no era la
-// que se queria para el Reel.
-const PIPER_BIN = process.env.PIPER_BIN || "piper";
-const PIPER_MODEL = process.env.PIPER_MODEL || "piper-voices/es_ES-davefx-medium.onnx";
+// Motor de voz: Edge TTS (edge-tts, paquete de Python, LGPLv3), sin costo y
+// sin necesitar cuenta ni API key — usa el mismo servicio de voces
+// neuronales que el lector de pantalla de Microsoft Edge. Se cambio a esto
+// porque Piper (el motor anterior, un modelo neuronal chico que corre
+// localmente) sonaba "robotico" incluso despues de ajustar la velocidad, y
+// las unicas voces en espanol de mejor calidad de Piper (alta calidad,
+// "high") ya se habian probado antes sin buen resultado (ver historial:
+// es_MX-claude-high se descarto por no ser la voz que se queria). Edge TTS
+// usa voces neuronales de nivel mucho mas alto (las mismas de Microsoft
+// Azure), por eso deberia sonar notablemente mas natural.
+const EDGE_TTS_VOICE = process.env.EDGE_TTS_VOICE || "es-MX-JorgeNeural";
+// Un poco mas lento que el 0% por defecto, para que se sienta como una
+// explicacion paso a paso (mismo motivo que el length_scale que se usaba
+// con Piper), pero sin pasarse: un rate muy negativo tambien puede sonar
+// cortado.
+const EDGE_TTS_RATE = process.env.EDGE_TTS_RATE || "-8%";
 
 if (!ACCESS_TOKEN) {
   console.error("Falta la variable FB_PAGE_ACCESS_TOKEN");
@@ -185,23 +193,18 @@ function buildNarrationSegments(coin, data, structure, insights) {
   return steps;
 }
 
-// Genera el audio de la narracion con Piper TTS (voz neuronal offline, sin
-// costo y sin depender de un servicio externo en vivo). Se le manda el
-// texto por stdin, tal como espera el binario de piper.
-function synthesizeNarration(text, outWavPath) {
+// Genera el audio de la narracion con Edge TTS (voz neuronal gratuita, ver
+// nota mas arriba). Se le pasa el texto como argumento (no por stdin, asi
+// evitamos problemas de encoding con acentos/enies en algunas terminales) y
+// se guarda directo en formato mp3, que ffmpeg lee sin problema mas
+// adelante igual que el wav de Piper.
+function synthesizeNarration(text, outAudioPath) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(PIPER_BIN, [
-      "--model", PIPER_MODEL,
-      "--output_file", outWavPath,
-      // Se bajo un poco la velocidad (length_scale mas alto = mas lento) y
-      // se alargo la pausa entre frases para que la narracion se sienta
-      // como una explicacion paso a paso. Se moderó de 1.3 a 1.15: un
-      // valor tan alto como 1.3 hacia que la voz sonara mas cortada y
-      // artificial (cada palabra separada de la siguiente), un efecto que
-      // se reporto como "robotico". 1.15 sigue siendo notablemente mas
-      // lento que la voz por defecto (1.0) pero conserva un flujo natural.
-      "--length_scale", "1.15",
-      "--sentence_silence", "0.45",
+    const proc = spawn("edge-tts", [
+      "--voice", EDGE_TTS_VOICE,
+      "--rate", EDGE_TTS_RATE,
+      "--text", text,
+      "--write-media", outAudioPath,
     ]);
 
     let stderr = "";
@@ -211,11 +214,8 @@ function synthesizeNarration(text, outWavPath) {
     proc.on("error", reject);
     proc.on("close", (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`Piper (voz) termino con codigo ${code}: ${stderr}`));
+      else reject(new Error(`Edge TTS (voz) termino con codigo ${code}: ${stderr}`));
     });
-
-    proc.stdin.write(text);
-    proc.stdin.end();
   });
 }
 
@@ -441,10 +441,16 @@ async function buildReelVideo(stages, segments, narrationPath, outPath) {
   });
   const charConcatInputs = charSegLabels.map((l) => `[${l}]`).join("");
   charSegFilters.push(`${charConcatInputs}concat=n=${charSegLabels.length}:v=1:a=0[charTrack]`);
+  // Pulso de brillo suave y constante sobre el personaje (independiente
+  // del ciclo de boca abierta/cerrada): con la foto real (style: "photo")
+  // las 5 variantes son la misma imagen fija, asi que esto es lo que le da
+  // sensacion de "vivo" mientras habla, en vez de mover la boca. Con el
+  // personaje dibujado (SVG) no molesta, se suma como un brillo extra.
+  charSegFilters.push(`[charTrack]eq=eval=frame:brightness='0.06*sin(2*PI*t*0.7)'[charTrackGlow]`);
 
   // Se superpone el personaje sobre el grafico ya armado, en una esquina,
   // y recien ahi se pasa a yuv420p (formato final que necesita libx264).
-  const overlayFilter = `[vbase][charTrack]overlay=x=${CHAR_X}:y=${CHAR_Y}:format=auto,format=yuv420p[v]`;
+  const overlayFilter = `[vbase][charTrackGlow]overlay=x=${CHAR_X}:y=${CHAR_Y}:format=auto,format=yuv420p[v]`;
 
   const videoFilter = [...segFilters, ...charSegFilters, overlayFilter].join(";");
 
@@ -604,7 +610,7 @@ async function main() {
   const segments = buildNarrationSegments(coin, data, stages.structure, stages.insights);
   const narrationText = segments.map((s) => s.text).join(" ");
   console.log("Narracion (paso a paso):\n" + segments.map((s) => `[${s.stage}] ${s.text}`).join("\n"));
-  const narrationPath = path.join(tmpdir(), `narracion-${coin.id}-${Date.now()}.wav`);
+  const narrationPath = path.join(tmpdir(), `narracion-${coin.id}-${Date.now()}.mp3`);
   await synthesizeNarration(narrationText, narrationPath);
 
   const outPath = path.join(tmpdir(), `reel-${coin.id}-${Date.now()}.mp4`);

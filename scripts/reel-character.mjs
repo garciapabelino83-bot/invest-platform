@@ -1,4 +1,17 @@
 import sharp from "sharp";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Foto real del robot que genero el usuario con IA (recortada a busto y
+// puesta en el mismo marco circular que los personajes dibujados a mano),
+// usada cuando style: "photo". Al ser una unica foto (no varios dibujos)
+// no se le puede animar la boca cuadro a cuadro; en vez de eso se usa la
+// misma imagen para las 5 variantes y se le agrega un pulso de brillo
+// suave en el video (ver buildReelVideo en post-reel-to-facebook.mjs) para
+// que igual se sienta "vivo" mientras habla.
+const PHOTO_PATH = path.join(__dirname, "assets", "robot-photo.png");
 
 // Mascota "Toro" (bull) del Reel: un personaje simple, estilo plano/
 // geometrico (no una cara humana realista, para que sea rapido de animar
@@ -27,6 +40,23 @@ function svgWrap(inner, size = 500) {
       <stop offset="0%" stop-color="${C1}"/>
       <stop offset="100%" stop-color="${C2}"/>
     </linearGradient>
+    <radialGradient id="shellGrad" cx="38%" cy="30%" r="75%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="55%" stop-color="#eef1f6"/>
+      <stop offset="100%" stop-color="#c9ceda"/>
+    </radialGradient>
+    <radialGradient id="eyeGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#e8faff"/>
+      <stop offset="35%" stop-color="#5ad1ff"/>
+      <stop offset="100%" stop-color="#5ad1ff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="visorGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#20232b"/>
+      <stop offset="100%" stop-color="#05060a"/>
+    </linearGradient>
+    <filter id="softBlur" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
   </defs>
   ${inner}
 </svg>`;
@@ -130,101 +160,111 @@ function buildBullSvg({ pose = "idle", mouthOpen = false } = {}) {
   return svgWrap(inner);
 }
 
-// Mascota "Robot analista" — mismo marco circular y mismo sistema de
-// poses/animacion que el toro, pero con look de robot/IA (cabeza redonda
-// blanca, ojos con brillo tipo LED, antena) en vez de un animal. Es un
-// diseno propio (no copia el logo ni la marca de ningun exchange real)
-// pero en el mismo estilo "asistente de IA amigable" que pidio el
-// usuario, combinado con los colores de InvestPanel (naranja) para que
-// se sienta parte de la misma marca.
+// Mascota "Robot analista" — v2. Mismo marco circular y mismo sistema de
+// poses/animacion que el toro, pero con un look de robot/IA mucho mas
+// "premium" (carcasa blanca brillante con degrade tipo plastico, ojos
+// grandes con halo de brillo, visor grande) que el usuario pidio
+// explicitamente despues de mandar una imagen de referencia (un robot 3D
+// blanco con ojos celestes grandes). No es un render fotorrealista (eso
+// necesitaria un generador de imagenes con IA que no tenemos disponible
+// aca) pero se acerca lo mas posible dentro de un dibujo vectorial: brillo
+// especular en la cabeza, sombra suave debajo, ojos con halo. Es un diseno
+// propio (no copia el logo ni la marca de ningun exchange real) combinado
+// con los colores de InvestPanel (naranja) para que se sienta parte de la
+// misma marca.
 function buildRobotSvg({ pose = "idle", mouthOpen = false } = {}) {
   const cx = 250,
-    cy = 250;
+    cy = 258;
   const GLOW = "#5ad1ff"; // brillo tipo LED de ojos/detalles
-  const SHELL = "#eef1f5"; // carcasa blanca/plateada
-  const SHELL_SHADOW = "#c7ccd6";
 
   const frame =
-    `<circle cx="${cx}" cy="${cy}" r="230" fill="${DARK}" fill-opacity="0.62"/>` +
-    `<circle cx="${cx}" cy="${cy}" r="230" fill="none" stroke="url(#brandGrad)" stroke-width="10"/>`;
+    `<circle cx="250" cy="250" r="230" fill="${DARK}" fill-opacity="0.62"/>` +
+    `<circle cx="250" cy="250" r="230" fill="none" stroke="url(#brandGrad)" stroke-width="10"/>`;
 
-  // Hombros / cuerpo: carcasa blanca con un panel en el pecho en naranja
-  // de marca (como un pequeno logo/indicador).
+  // Sombra suave debajo del personaje, para que no se sienta "flotando".
+  const shadow = `<ellipse cx="${cx}" cy="410" rx="120" ry="20" fill="#000" opacity="0.35" filter="url(#softBlur)"/>`;
+
+  // Hombros / cuerpo: carcasa blanca brillante con panel de marca al pecho.
   const body =
-    `<path d="M 85 475 Q 250 335 415 475 L 415 500 L 85 500 Z" fill="${SHELL}" stroke="${SHELL_SHADOW}" stroke-width="4"/>` +
-    `<rect x="228" y="380" width="44" height="34" rx="10" fill="url(#brandGrad)"/>`;
+    `<path d="M 130 400 Q 250 320 370 400 L 370 430 Q 250 400 130 430 Z" fill="url(#shellGrad)" stroke="#b9bfcd" stroke-width="3"/>` +
+    `<path d="M 205 355 Q 250 372 295 355 L 288 410 Q 250 422 212 410 Z" fill="url(#brandGrad)"/>`;
 
-  // Antena
+  // Orejas/sensores laterales — anillos parcialmente visibles.
+  const earL = `<circle cx="118" cy="270" r="30" fill="#c9ceda"/><circle cx="118" cy="270" r="18" fill="url(#shellGrad)"/>`;
+  const earR = `<circle cx="382" cy="270" r="30" fill="#c9ceda"/><circle cx="382" cy="270" r="18" fill="url(#shellGrad)"/>`;
+
+  // Cabeza: domo grande y redondeado, con degrade tipo plastico brillante
+  // y un brillo especular arriba a la izquierda (como luz reflejada).
+  const head = `<path d="M 130 250 Q 130 95 250 95 Q 370 95 370 250 Q 370 340 250 340 Q 130 340 130 250 Z" fill="url(#shellGrad)" stroke="#b9bfcd" stroke-width="3"/>`;
+  const specular = `<ellipse cx="195" cy="150" rx="42" ry="24" fill="#ffffff" opacity="0.75" transform="rotate(-25 195 150)"/>`;
+
+  // Antena con lucecita (cambia de color mientras "explica", como un
+  // pequeno indicador de actividad).
   const antenna =
-    `<line x1="250" y1="118" x2="250" y2="80" stroke="${SHELL_SHADOW}" stroke-width="7" stroke-linecap="round"/>` +
-    `<circle cx="250" cy="70" r="14" fill="${GLOW}"/>`;
+    `<line x1="250" y1="95" x2="250" y2="55" stroke="#c9ceda" stroke-width="8" stroke-linecap="round"/>` +
+    `<circle cx="250" cy="46" r="12" fill="${pose === "explain" ? C1 : GLOW}"/>`;
 
-  // Orejas/auriculares laterales (sensores de audio)
-  const earL = `<rect x="98" y="238" width="26" height="64" rx="13" fill="${SHELL_SHADOW}"/>`;
-  const earR = `<rect x="376" y="238" width="26" height="64" rx="13" fill="${SHELL_SHADOW}"/>`;
+  // Visor: panel oscuro grande que cubre casi toda la cara (no una franja
+  // delgada), como en la referencia que mando el usuario.
+  const visor = `<path d="M 158 210 Q 158 150 250 150 Q 342 150 342 210 L 342 275 Q 342 320 250 320 Q 158 320 158 275 Z" fill="url(#visorGrad)"/>`;
 
-  // Cabeza: capsula redondeada
-  const head = `<rect x="132" y="120" width="236" height="220" rx="90" fill="${SHELL}" stroke="${SHELL_SHADOW}" stroke-width="4"/>`;
-
-  // Visor/pantalla de la cara, mas oscuro, donde van los ojos y la boca
-  const visor = `<rect x="162" y="192" width="176" height="118" rx="46" fill="#161a22"/>`;
-
-  // Ojos: arcos con brillo tipo LED. En "thumbsup" se cierran felices
-  // (arco hacia abajo), igual gesto que el resto de las poses pero con
-  // un pequeno "destello" extra para dar sensacion de alegria.
+  // Ojos grandes con halo de brillo detras — la seña mas caracteristica
+  // del diseno de referencia. Varian de forma segun la pose.
   let eyes;
   if (pose === "thumbsup") {
     eyes =
-      `<path d="M 198 245 Q 213 230 228 245" fill="none" stroke="${GLOW}" stroke-width="9" stroke-linecap="round"/>` +
-      `<path d="M 272 245 Q 287 230 302 245" fill="none" stroke="${GLOW}" stroke-width="9" stroke-linecap="round"/>`;
+      `<ellipse cx="205" cy="235" rx="34" ry="30" fill="url(#eyeGlow)"/>` +
+      `<ellipse cx="295" cy="235" rx="34" ry="30" fill="url(#eyeGlow)"/>` +
+      `<path d="M 183 235 Q 205 215 227 235" fill="none" stroke="${GLOW}" stroke-width="9" stroke-linecap="round"/>` +
+      `<path d="M 273 235 Q 295 215 317 235" fill="none" stroke="${GLOW}" stroke-width="9" stroke-linecap="round"/>`;
   } else if (pose === "explain") {
-    // ojos entrecerrados/concentrados: arcos mas planos
     eyes =
-      `<path d="M 196 240 Q 213 248 230 240" fill="none" stroke="${GLOW}" stroke-width="9" stroke-linecap="round"/>` +
-      `<path d="M 270 240 Q 287 248 304 240" fill="none" stroke="${GLOW}" stroke-width="9" stroke-linecap="round"/>`;
+      `<ellipse cx="205" cy="238" rx="30" ry="34" fill="url(#eyeGlow)"/>` +
+      `<ellipse cx="295" cy="238" rx="30" ry="34" fill="url(#eyeGlow)"/>` +
+      `<ellipse cx="205" cy="240" rx="15" ry="19" fill="#eafcff"/>` +
+      `<ellipse cx="295" cy="240" rx="15" ry="19" fill="#eafcff"/>`;
   } else {
     eyes =
-      `<circle cx="213" cy="243" r="15" fill="${GLOW}"/>` +
-      `<circle cx="287" cy="243" r="15" fill="${GLOW}"/>`;
+      `<ellipse cx="205" cy="235" rx="30" ry="34" fill="url(#eyeGlow)"/>` +
+      `<ellipse cx="295" cy="235" rx="30" ry="34" fill="url(#eyeGlow)"/>` +
+      `<ellipse cx="205" cy="235" rx="15" ry="19" fill="#eafcff"/>` +
+      `<ellipse cx="295" cy="235" rx="15" ry="19" fill="#eafcff"/>`;
   }
 
-  // Boca: barra de "luces" tipo ecualizador — mas ancha/alta cuando
-  // "habla" (mouthOpen), fina cuando esta cerrada.
+  // Boca: sonrisa curva brillante, siempre presente (como en la
+  // referencia), que se ensancha un poco cuando "habla" (mouthOpen) — el
+  // mismo ciclo de dos cuadros que se usaba con la boca tipo ecualizador.
   const mouth = mouthOpen
-    ? `<rect x="205" y="275" width="90" height="20" rx="10" fill="${GLOW}"/>` +
-      `<rect x="215" y="270" width="10" height="30" rx="5" fill="#0a0b0e" opacity="0.35"/>` +
-      `<rect x="240" y="270" width="10" height="30" rx="5" fill="#0a0b0e" opacity="0.35"/>` +
-      `<rect x="265" y="270" width="10" height="30" rx="5" fill="#0a0b0e" opacity="0.35"/>` +
-      `<rect x="290" y="270" width="8" height="30" rx="4" fill="#0a0b0e" opacity="0.35"/>`
-    : `<rect x="212" y="282" width="76" height="10" rx="5" fill="${GLOW}"/>`;
+    ? `<path d="M 205 285 Q 250 308 295 285" fill="none" stroke="${GLOW}" stroke-width="9" stroke-linecap="round"/>`
+    : `<path d="M 210 283 Q 250 298 290 283" fill="none" stroke="${GLOW}" stroke-width="7" stroke-linecap="round"/>`;
 
   let accessory = "";
   if (pose === "idle") {
     // mano robotica saludando
     accessory =
-      `<g transform="translate(382,330) rotate(-10)">` +
-      `<rect x="-24" y="-30" width="48" height="60" rx="18" fill="${SHELL}" stroke="${SHELL_SHADOW}" stroke-width="3"/>` +
+      `<g transform="translate(392,300) rotate(-12)">` +
+      `<rect x="-16" y="-46" width="32" height="60" rx="16" fill="url(#shellGrad)" stroke="#b9bfcd" stroke-width="2"/>` +
       `</g>`;
   } else if (pose === "explain") {
     // mano robotica senalando hacia el grafico
     accessory =
-      `<g transform="translate(66,362)">` +
-      `<rect x="-60" y="-16" width="70" height="32" rx="16" fill="${SHELL}" stroke="${SHELL_SHADOW}" stroke-width="3"/>` +
+      `<g transform="translate(78,320)">` +
+      `<rect x="-60" y="-16" width="70" height="32" rx="16" fill="url(#shellGrad)" stroke="#b9bfcd" stroke-width="2"/>` +
       `</g>`;
   } else if (pose === "thumbsup") {
     accessory =
-      `<g transform="translate(392,335) rotate(-8)">` +
-      `<rect x="-24" y="-8" width="48" height="46" rx="16" fill="${SHELL}" stroke="${SHELL_SHADOW}" stroke-width="3"/>` +
-      `<rect x="-14" y="-42" width="20" height="40" rx="10" fill="${SHELL}" stroke="${SHELL_SHADOW}" stroke-width="3"/>` +
+      `<g transform="translate(395,290) rotate(-10)">` +
+      `<rect x="-22" y="-8" width="44" height="42" rx="14" fill="url(#shellGrad)" stroke="#b9bfcd" stroke-width="2"/>` +
+      `<rect x="-12" y="-40" width="18" height="36" rx="9" fill="url(#shellGrad)" stroke="#b9bfcd" stroke-width="2"/>` +
       `</g>`;
   }
 
   const glowRing =
     pose === "explain"
-      ? `<circle cx="${cx}" cy="${cy}" r="230" fill="none" stroke="${GLOW}" stroke-width="4" stroke-opacity="0.55"/>`
+      ? `<circle cx="${cx}" cy="${cy}" r="230" fill="none" stroke="${C1}" stroke-width="4" stroke-opacity="0.55"/>`
       : "";
 
-  const inner = [frame, body, antenna, earL, earR, head, visor, eyes, mouth, accessory, glowRing].join("");
+  const inner = [frame, shadow, body, earL, earR, head, specular, antenna, visor, eyes, mouth, accessory, glowRing].join("");
 
   return svgWrap(inner);
 }
@@ -233,11 +273,13 @@ function buildRobotSvg({ pose = "idle", mouthOpen = false } = {}) {
 // combinaciones de pose/boca que necesita el video: boca abierta y
 // cerrada para "idle" y "explain" (para el ciclo de "hablando"), y una
 // sola imagen fija para "thumbsup" (gesto de cierre, sin animar boca).
-// style: "robot" (por defecto, look de asistente de IA) o "bull" (la
-// mascota toro original) — mismo sistema de poses en ambos casos, asi
-// que cambiar de uno a otro no requiere tocar nada mas del video.
-export async function renderCharacterFrames({ style = "robot" } = {}) {
-  const builder = style === "bull" ? buildBullSvg : buildRobotSvg;
+// style: "photo" (por defecto ahora — la foto que genero el usuario con
+// IA), "robot" (el dibujo vectorial, por si se quiere volver a el) o
+// "bull" (la mascota toro original). En "photo" las 5 variantes son la
+// misma imagen (no hay boca animada cuadro a cuadro posible con una sola
+// foto); el "efecto de vida" se agrega despues, en el video, con un pulso
+// de brillo (ver buildReelVideo).
+export async function renderCharacterFrames({ style = "photo" } = {}) {
   const variants = [
     { key: "idle_open", pose: "idle", mouthOpen: true },
     { key: "idle_closed", pose: "idle", mouthOpen: false },
@@ -246,6 +288,14 @@ export async function renderCharacterFrames({ style = "robot" } = {}) {
     { key: "thumbsup", pose: "thumbsup", mouthOpen: false },
   ];
 
+  if (style === "photo") {
+    const photoBuffer = await readFile(PHOTO_PATH);
+    const images = {};
+    for (const v of variants) images[v.key] = photoBuffer;
+    return images;
+  }
+
+  const builder = style === "bull" ? buildBullSvg : buildRobotSvg;
   const images = {};
   await Promise.all(
     variants.map(async (v) => {

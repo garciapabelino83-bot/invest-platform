@@ -287,7 +287,7 @@ function buildCandlesSvg(candles, x, y, w, h) {
       const bodyH = Math.max(yBottom - yTop, 8);
       return (
         `<line x1="${cx.toFixed(1)}" y1="${yHigh.toFixed(1)}" x2="${cx.toFixed(1)}" y2="${yLow.toFixed(1)}" stroke="${color}" stroke-width="6"/>` +
-        `<rect x="${(cx - bodyWidth / 2).toFixed(1)}" y="${yTop.toFixed(1)}" width="${bodyWidth.toFixed(1)}" height="${bodyH.toFixed(1)}" rx="5" fill="${color}"/>`
+        `<rect x="${(cx - bodyWidth / 2).toFixed(1)}" y="${yTop.toFixed(1)}" width="${bodyWidth.toFixed(1)}" height="${bodyH.toFixed(1)}" rx="2" fill="${color}"/>`
       );
     })
     .join("");
@@ -516,15 +516,46 @@ function buildEntryArrowSvg(candles, structure, x, y, w, h, current = false) {
 // todas las demas etapas, para que el grafico se lea como una pantalla de
 // trading real y no como un fondo negro liso — el detalle que faltaba
 // para que se viera mas profesional.
-function buildGrid(x, y, w, h, { faint = false } = {}) {
+// Cuadricula de fondo. Cuando se le pasan las velas (candles), ademas
+// dibuja el precio de cada linea horizontal sobre el borde derecho del
+// grafico — como el eje de precios de un grafico de trading real (Binance,
+// TradingView), en vez de una cuadricula "vacia" sin escala. Se eligio el
+// borde derecho (y no el izquierdo) a proposito: el personaje animado se
+// dibuja siempre en la esquina inferior IZQUIERDA del video (ver
+// reel-character.mjs / post-reel-to-facebook.mjs), y tapaba los precios de
+// ahi abajo. Las demas etiquetas (BOS, Order Block) se dibujan cerca de su
+// propia vela, no pegadas al borde, asi casi nunca chocan con el eje; en el
+// caso puntual en que si coinciden (Resistencia/Soporte/Liquidez, que si
+// usan el borde derecho), esas etiquetas se dibujan despues en el SVG y
+// quedan por encima, tapando el numero del eje en esa fila nada mas — nunca
+// texto ilegible superpuesto.
+function buildGrid(x, y, w, h, { faint = false, candles = null } = {}) {
   const rows = 4;
   const opacity = faint ? 0.45 : 1;
   let lines = "";
+  let axisLabels = "";
+
+  let min = null;
+  let max = null;
+  if (candles && candles.length) {
+    min = Math.min(...candles.map((c) => c.low));
+    max = Math.max(...candles.map((c) => c.high));
+  }
+
   for (let i = 0; i <= rows; i++) {
     const ly = y + (h / rows) * i;
     lines += `<line x1="${x}" y1="${ly.toFixed(1)}" x2="${x + w}" y2="${ly.toFixed(1)}" stroke="#1c1d21" stroke-width="3" stroke-dasharray="16 18" stroke-opacity="${opacity}"/>`;
+
+    if (min !== null) {
+      const price = max - ((max - min) * i) / rows;
+      // La linea de arriba del todo empuja el texto hacia abajo, y la de
+      // abajo del todo lo empuja hacia arriba, para que nunca se corte
+      // contra el borde del grafico.
+      const ty = i === 0 ? ly + 32 : i === rows ? ly - 12 : ly - 12;
+      axisLabels += `<text x="${(x + w - 14).toFixed(1)}" y="${ty.toFixed(1)}" font-size="25" font-weight="600" fill="#565d6b" font-family="monospace" text-anchor="end" opacity="${opacity}">${escapeXml(formatUSD(price))}</text>`;
+    }
   }
-  return lines;
+  return lines + axisLabels;
 }
 
 // Arma el contenido del grafico para una "etapa" concreta de la
@@ -544,7 +575,7 @@ function buildChartContent(insights, structure, stage, chartX, chartY, chartW, c
 
   if (!structure) {
     return (
-      buildGrid(chartX, chartY, chartW, chartH, { faint: true }) +
+      buildGrid(chartX, chartY, chartW, chartH, { faint: true, candles: insights.candles }) +
       buildLevelsSvg(insights.candles, insights, chartX, chartY, chartW, chartH) +
       buildViSvg(insights.candles, insights, chartX, chartY, chartW, chartH) +
       buildCandlesSvg(insights.candles, chartX, chartY, chartW, chartH) +
@@ -567,7 +598,7 @@ function buildChartContent(insights, structure, stage, chartX, chartY, chartW, c
   // el aspecto de "etiquetas mal ubicadas" que senalo el usuario. Solo se
   // usa en el diseno de respaldo (sin estructura) mas abajo, donde SI es
   // el elemento principal que se explica.
-  let shapes = buildGrid(chartX, chartY, chartW, chartH, { faint: true });
+  let shapes = buildGrid(chartX, chartY, chartW, chartH, { faint: true, candles: insights.candles });
   if (includeZones) shapes += buildZonesSvg(insights.candles, structure, chartX, chartY, chartW, chartH, isCurrent("zones"));
   if (includeBos) shapes += buildBosSvg(insights.candles, structure, chartX, chartY, chartW, chartH);
   if (includeLiquidity) shapes += buildLiquiditySvg(insights.candles, structure, chartX, chartY, chartW, chartH);
