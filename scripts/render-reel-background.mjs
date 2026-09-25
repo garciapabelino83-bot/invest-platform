@@ -40,21 +40,27 @@ function escapeXml(str) {
     .replace(/>/g, "&gt;");
 }
 
-// Pequena etiqueta con fondo solido, para que el texto se siga leyendo
-// bien aunque una mecha de vela (u otra linea) pase por detras.
-function labelPill(x, y, text, { fontSize = 32, color = "#ffffff", anchor = "start" } = {}) {
-  const charW = fontSize * 0.6;
+// Etiqueta con fondo solido y borde del color del elemento, para que se
+// lea bien aunque una mecha de vela (u otra linea) pase por detras, y con
+// un poco mas de aire alrededor del texto para que se vea mas cuidada
+// (menos "pegada") que la version anterior. Acepta un flag "glow" para
+// resaltarla brevemente justo en el momento en que aparece un elemento
+// nuevo durante la revelacion progresiva.
+function labelPill(x, y, text, { fontSize = 32, color = "#ffffff", anchor = "start", glow = false } = {}) {
+  const charW = fontSize * 0.64;
   const textW = text.length * charW;
-  const padX = 16;
-  const boxH = fontSize * 1.5;
+  const padX = 20;
+  const boxH = fontSize * 1.7;
   let boxX;
   if (anchor === "end") boxX = x - textW - padX;
   else if (anchor === "middle") boxX = x - textW / 2 - padX;
   else boxX = x - padX;
   const boxW = textW + padX * 2;
-  const boxY = y - fontSize * 1.05;
+  const boxY = y - fontSize * 1.15;
+  const glowExtra = glow ? `<rect x="${(boxX - 6).toFixed(1)}" y="${(boxY - 6).toFixed(1)}" width="${(boxW + 12).toFixed(1)}" height="${(boxH + 12).toFixed(1)}" rx="14" fill="none" stroke="${color}" stroke-width="3" stroke-opacity="0.55"/>` : "";
   return (
-    `<rect x="${boxX.toFixed(1)}" y="${boxY.toFixed(1)}" width="${boxW.toFixed(1)}" height="${boxH.toFixed(1)}" rx="10" fill="#05060a" fill-opacity="0.78"/>` +
+    glowExtra +
+    `<rect x="${boxX.toFixed(1)}" y="${boxY.toFixed(1)}" width="${boxW.toFixed(1)}" height="${boxH.toFixed(1)}" rx="12" fill="#0a0b0f" fill-opacity="0.88" stroke="${color}" stroke-width="1.5" stroke-opacity="0.6"/>` +
     `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-size="${fontSize}" font-weight="700" fill="${color}" text-anchor="${anchor}">${escapeXml(text)}</text>`
   );
 }
@@ -354,7 +360,7 @@ function buildBosSvg(candles, structure, x, y, w, h) {
   return `<line x1="${xStart.toFixed(1)}" y1="${ly.toFixed(1)}" x2="${xEnd.toFixed(1)}" y2="${ly.toFixed(1)}" stroke="${color}" stroke-width="4" stroke-dasharray="16 10"/>`;
 }
 
-function buildBosLabelSvg(candles, structure, x, y, w, h) {
+function buildBosLabelSvg(candles, structure, x, y, w, h, current = false) {
   const scaleY = makeScaleY(candles, y, h);
   const n = candles.length;
   const slot = w / n;
@@ -362,15 +368,15 @@ function buildBosLabelSvg(candles, structure, x, y, w, h) {
   const color = "#facc15";
   const xStart = x + slot * (swingIndex + 0.5);
   const ly = scaleY(price);
-  const labelY = ly - 18 > y ? ly - 18 : ly + 44;
-  return labelPill(xStart, labelY, "BOS", { fontSize: 34, color });
+  const labelY = ly - 26 > y ? ly - 26 : ly + 52;
+  return labelPill(xStart, labelY, "BOS", { fontSize: 34, color, glow: current });
 }
 
 // Order Block (banda oscura y delgada) y Zona de Demanda/Oferta (banda
 // azul o roja, mas ancha, que se extiende hacia la derecha porque sigue
 // "vigente"). Es la misma zona que dibuja la referencia: el Order Block
 // justo pegado a la Zona de Demanda/Oferta.
-function buildZonesSvg(candles, structure, x, y, w, h) {
+function buildZonesSvg(candles, structure, x, y, w, h, current = false) {
   const scaleY = makeScaleY(candles, y, h);
   const n = candles.length;
   const slot = w / n;
@@ -389,9 +395,10 @@ function buildZonesSvg(candles, structure, x, y, w, h) {
   const zonePad = Math.max(h * 0.03, 14);
   const zoneTop = isBull ? yTop : yTop - zonePad;
   const zoneH = obH + zonePad;
+  const zoneStroke = current ? 4.5 : 3;
 
   return (
-    `<rect x="${xStart.toFixed(1)}" y="${zoneTop.toFixed(1)}" width="${(xEnd - xStart).toFixed(1)}" height="${zoneH.toFixed(1)}" fill="${zoneColor}" fill-opacity="0.14" stroke="${zoneColor}" stroke-width="3"/>` +
+    `<rect x="${xStart.toFixed(1)}" y="${zoneTop.toFixed(1)}" width="${(xEnd - xStart).toFixed(1)}" height="${zoneH.toFixed(1)}" fill="${zoneColor}" fill-opacity="0.14" stroke="${zoneColor}" stroke-width="${zoneStroke}"/>` +
     `<rect x="${xStart.toFixed(1)}" y="${yTop.toFixed(1)}" width="${Math.min(xEnd - xStart, slot * 3).toFixed(1)}" height="${obH.toFixed(1)}" fill="#9aa0ad" fill-opacity="0.22" stroke="#9aa0ad" stroke-width="2.5"/>`
   );
 }
@@ -399,7 +406,7 @@ function buildZonesSvg(candles, structure, x, y, w, h) {
 // Etiquetas "Zona de Demanda/Oferta" y "Order Block" — se dibujan aparte,
 // encima de las velas, con fondo solido, para que nunca queden tapadas
 // por una mecha (el bug que se vio en la prueba local).
-function buildZonesLabelsSvg(candles, structure, x, y, w, h) {
+function buildZonesLabelsSvg(candles, structure, x, y, w, h, current = false) {
   const scaleY = makeScaleY(candles, y, h);
   const n = candles.length;
   const slot = w / n;
@@ -417,9 +424,27 @@ function buildZonesLabelsSvg(candles, structure, x, y, w, h) {
   const zoneTop = isBull ? yTop : yTop - zonePad;
   const zoneH = obH + zonePad;
 
+  // El Order Block siempre esta justo antes del impulso que rompio la
+  // estructura, asi que las velas que le siguen (las del propio impulso)
+  // suelen pasar muy cerca o por encima de una etiqueta puesta justo
+  // arriba de su caja — eso era lo que se veia mal ("las etiquetas se
+  // ven mal ubicadas"). Para evitarlo, se busca el punto mas alto entre
+  // el Order Block y las 4 velas siguientes (el tramo del impulso) y la
+  // etiqueta "Order Block" se coloca por encima de TODO ese tramo, no
+  // solo de su propia caja.
+  const scanEnd = Math.min(index + 4, candles.length - 1);
+  let highestPoint = top;
+  for (let i = index; i <= scanEnd; i++) {
+    if (candles[i].high > highestPoint) highestPoint = candles[i].high;
+  }
+  const clearY = scaleY(highestPoint) - 34;
+
+  // "Zona de Demanda/Oferta" se deja bien abajo de la caja, con espacio
+  // de sobra para que no se encime con "Order Block" ni con la linea de
+  // Liquidez que pueda pasar cerca.
   return (
-    labelPill(xStart + 14, zoneTop + zoneH + 40, zoneLabel, { fontSize: 34, color: zoneColor }) +
-    labelPill(xStart + 14, yTop - 14, "Order Block", { fontSize: 30, color: "#c7cad1" })
+    labelPill(xStart + 14, clearY, "Order Block", { fontSize: 30, color: "#c7cad1", glow: current }) +
+    labelPill(xStart + 14, zoneTop + zoneH + 56, zoneLabel, { fontSize: 34, color: zoneColor, glow: current })
   );
 }
 
@@ -434,19 +459,31 @@ function buildLiquiditySvg(candles, structure, x, y, w, h) {
   return `<line x1="${x}" y1="${ly.toFixed(1)}" x2="${x + w}" y2="${ly.toFixed(1)}" stroke="${color}" stroke-width="3" stroke-dasharray="6 10" opacity="0.8"/>`;
 }
 
-function buildLiquidityLabelSvg(candles, structure, x, y, w, h) {
+function buildLiquidityLabelSvg(candles, structure, x, y, w, h, current = false) {
   const scaleY = makeScaleY(candles, y, h);
   const ly = scaleY(structure.liquidity.price);
   const isBull = structure.bias === "alcista";
-  const labelY = isBull ? ly + 44 : ly - 18;
+  const fontSize = 32;
+  let labelY = isBull ? ly + 50 : ly - 24;
+  // La linea de liquidez suele quedar cerca del borde superior o inferior
+  // del grafico (es el extremo del rango). Si el lado "normal" se sale del
+  // area del grafico, la etiqueta se pone del otro lado para que no quede
+  // cortada por el borde ni pisando la tarjeta de RSI/Tendencia de abajo.
+  const boxTop = labelY - fontSize * 1.15;
+  const boxBottom = labelY + fontSize * 0.55;
+  if (boxBottom > y + h - 12) {
+    labelY = ly - 24;
+  } else if (boxTop < y + 12) {
+    labelY = ly + 50;
+  }
   const color = "#e2e4e9";
-  return labelPill(x + w - 14, labelY, "Liquidez", { fontSize: 32, color, anchor: "end" });
+  return labelPill(x + w - 14, labelY, "Liquidez", { fontSize, color, anchor: "end", glow: current });
 }
 
 // Flecha de entrada hacia el objetivo, con la relacion riesgo/beneficio
 // (RR), igual que en un plan de trade real: desde el Order Block hasta
 // el otro extremo del rango.
-function buildEntryArrowSvg(candles, structure, x, y, w, h) {
+function buildEntryArrowSvg(candles, structure, x, y, w, h, current = false) {
   const scaleY = makeScaleY(candles, y, h);
   const n = candles.length;
   const slot = w / n;
@@ -462,11 +499,12 @@ function buildEntryArrowSvg(candles, structure, x, y, w, h) {
   const midX = (xStart + xEnd) / 2;
   const midY = (yStart + yEnd) / 2;
   const rrLabel = rr !== null ? `RR ${rr.toFixed(1)}` : "";
+  const rrStroke = current ? 3.5 : 2.5;
 
   return (
     `<line x1="${xStart.toFixed(1)}" y1="${yStart.toFixed(1)}" x2="${xEnd.toFixed(1)}" y2="${yEnd.toFixed(1)}" stroke="${color}" stroke-width="5" stroke-dasharray="4 10" marker-end="url(#${markerId})"/>` +
     (rrLabel
-      ? `<rect x="${(midX - 90).toFixed(1)}" y="${(midY - 60).toFixed(1)}" width="180" height="72" rx="16" fill="#0a0b0e" stroke="${color}" stroke-width="2.5"/>` +
+      ? `<rect x="${(midX - 90).toFixed(1)}" y="${(midY - 60).toFixed(1)}" width="180" height="72" rx="16" fill="#0a0b0e" stroke="${color}" stroke-width="${rrStroke}"/>` +
         `<text x="${midX.toFixed(1)}" y="${(midY - 14).toFixed(1)}" font-size="38" font-weight="700" fill="${color}" text-anchor="middle">${rrLabel}</text>`
       : "")
   );
@@ -474,13 +512,17 @@ function buildEntryArrowSvg(candles, structure, x, y, w, h) {
 
 // Cuadricula tenue que ocupa el mismo espacio que las velas, para que la
 // variante "vacia" no se vea como un hueco sino como un grafico esperando
-// a dibujarse.
-function buildGrid(x, y, w, h) {
+// a dibujarse. Tambien se dibuja (aun mas tenue) DETRAS de las velas en
+// todas las demas etapas, para que el grafico se lea como una pantalla de
+// trading real y no como un fondo negro liso — el detalle que faltaba
+// para que se viera mas profesional.
+function buildGrid(x, y, w, h, { faint = false } = {}) {
   const rows = 4;
+  const opacity = faint ? 0.45 : 1;
   let lines = "";
   for (let i = 0; i <= rows; i++) {
     const ly = y + (h / rows) * i;
-    lines += `<line x1="${x}" y1="${ly.toFixed(1)}" x2="${x + w}" y2="${ly.toFixed(1)}" stroke="#1c1d21" stroke-width="3" stroke-dasharray="16 18"/>`;
+    lines += `<line x1="${x}" y1="${ly.toFixed(1)}" x2="${x + w}" y2="${ly.toFixed(1)}" stroke="#1c1d21" stroke-width="3" stroke-dasharray="16 18" stroke-opacity="${opacity}"/>`;
   }
   return lines;
 }
@@ -489,10 +531,12 @@ function buildGrid(x, y, w, h) {
 // revelacion progresiva del video: "empty" (solo cuadricula), "candles"
 // (velas solas, sin nada de SMC todavia), "bos", "zones", "liquidity" y
 // "full" van agregando, en ese orden, cada elemento de la estructura SMC
-// (cada uno se queda ya dibujado en las etapas siguientes). Si no se
-// detecto una ruptura de estructura clara, se usa el diseno anterior
-// (soporte/resistencia + VI) desde la primera etapa con velas, sin
-// escalonarlo, porque no hay elementos separados que ir revelando.
+// (cada uno se queda ya dibujado en las etapas siguientes, con un borde
+// resaltado "glow" en el elemento recien aparecido para que se note bien
+// cual es el que se esta explicando en ese momento). Si no se detecto una
+// ruptura de estructura clara, se usa el diseno anterior (soporte/
+// resistencia + VI) desde la primera etapa con velas, sin escalonarlo,
+// porque no hay elementos separados que ir revelando.
 function buildChartContent(insights, structure, stage, chartX, chartY, chartW, chartH) {
   if (stage === "empty" || !insights.candles) {
     return buildGrid(chartX, chartY, chartW, chartH);
@@ -500,6 +544,7 @@ function buildChartContent(insights, structure, stage, chartX, chartY, chartW, c
 
   if (!structure) {
     return (
+      buildGrid(chartX, chartY, chartW, chartH, { faint: true }) +
       buildLevelsSvg(insights.candles, insights, chartX, chartY, chartW, chartH) +
       buildViSvg(insights.candles, insights, chartX, chartY, chartW, chartH) +
       buildCandlesSvg(insights.candles, chartX, chartY, chartW, chartH) +
@@ -513,19 +558,27 @@ function buildChartContent(insights, structure, stage, chartX, chartY, chartW, c
   const includeZones = level >= order.indexOf("zones");
   const includeLiquidity = level >= order.indexOf("liquidity");
   const includeEntry = level >= order.indexOf("full");
+  const isCurrent = (name) => order[level] === name;
 
-  let shapes = buildViSvg(insights.candles, insights, chartX, chartY, chartW, chartH);
-  if (includeZones) shapes += buildZonesSvg(insights.candles, structure, chartX, chartY, chartW, chartH);
+  // Nota: la zona de Volume Imbalance (VI) NO se dibuja aqui a proposito.
+  // Es un elemento que no se explica en la narracion cuando hay una
+  // estructura SMC completa (BOS/Order Block/etc.), y al dibujarse sin
+  // etiqueta hablada terminaba superpuesta con el Order Block, generando
+  // el aspecto de "etiquetas mal ubicadas" que senalo el usuario. Solo se
+  // usa en el diseno de respaldo (sin estructura) mas abajo, donde SI es
+  // el elemento principal que se explica.
+  let shapes = buildGrid(chartX, chartY, chartW, chartH, { faint: true });
+  if (includeZones) shapes += buildZonesSvg(insights.candles, structure, chartX, chartY, chartW, chartH, isCurrent("zones"));
   if (includeBos) shapes += buildBosSvg(insights.candles, structure, chartX, chartY, chartW, chartH);
   if (includeLiquidity) shapes += buildLiquiditySvg(insights.candles, structure, chartX, chartY, chartW, chartH);
 
-  let labels = buildViLabelSvg(insights.candles, insights, chartX, chartY, chartW, chartH);
-  if (includeBos) labels += buildBosLabelSvg(insights.candles, structure, chartX, chartY, chartW, chartH);
-  if (includeZones) labels += buildZonesLabelsSvg(insights.candles, structure, chartX, chartY, chartW, chartH);
-  if (includeLiquidity) labels += buildLiquidityLabelSvg(insights.candles, structure, chartX, chartY, chartW, chartH);
+  let labels = "";
+  if (includeBos) labels += buildBosLabelSvg(insights.candles, structure, chartX, chartY, chartW, chartH, isCurrent("bos"));
+  if (includeZones) labels += buildZonesLabelsSvg(insights.candles, structure, chartX, chartY, chartW, chartH, isCurrent("zones"));
+  if (includeLiquidity) labels += buildLiquidityLabelSvg(insights.candles, structure, chartX, chartY, chartW, chartH, isCurrent("liquidity"));
 
   const entry = includeEntry
-    ? buildEntryArrowSvg(insights.candles, structure, chartX, chartY, chartW, chartH)
+    ? buildEntryArrowSvg(insights.candles, structure, chartX, chartY, chartW, chartH, isCurrent("full"))
     : "";
 
   return shapes + buildCandlesSvg(insights.candles, chartX, chartY, chartW, chartH) + labels + entry;
@@ -604,43 +657,50 @@ function buildCardSvg(coin, data, { stage }) {
 
   <!-- Header -->
   <rect x="${pad}" y="150" width="70" height="70" rx="18" fill="url(#coinBadge)"/>
-  <text x="${pad + 92}" y="205" font-size="68" font-weight="700" fill="#ffffff">InvestPanel</text>
-  <line x1="${pad}" y1="270" x2="${W - pad}" y2="270" stroke="#1c1d21" stroke-width="4"/>
+  <text x="${pad + 92}" y="205" font-size="68" font-weight="700" fill="#ffffff" letter-spacing="1">InvestPanel</text>
+  <circle cx="${W - pad - 18}" cy="182" r="10" fill="#4ade80"/>
+  <text x="${W - pad - 40}" y="192" font-size="32" font-weight="600" fill="#4ade80" text-anchor="end" letter-spacing="2">EN VIVO</text>
+  <line x1="${pad}" y1="270" x2="${W - pad}" y2="270" stroke="url(#coinBadge)" stroke-width="3" stroke-opacity="0.5"/>
+
+  <!-- Tarjeta principal: moneda + precio, agrupados en un solo panel para
+       que se lea como un bloque de informacion (no texto suelto) -->
+  <rect x="${pad}" y="330" width="${W - pad * 2}" height="640" rx="40" fill="#101116" fill-opacity="0.6" stroke="#22242b" stroke-width="2"/>
 
   <!-- Coin -->
-  <rect x="${pad}" y="360" width="260" height="260" rx="60" fill="url(#coinBadge)"/>
-  <text x="${pad + 130}" y="510" font-size="88" font-weight="700" fill="#0a0a0b" text-anchor="middle">${initials}</text>
-  <text x="${pad + 300}" y="450" font-size="104" font-weight="700" fill="#ffffff">${escapeXml(coin.name)}</text>
-  <text x="${pad + 300}" y="530" font-size="58" font-weight="400" fill="#8a8d93">${escapeXml(coin.symbol)} / USD &#183; Analisis tecnico</text>
+  <rect x="${pad + 48}" y="390" width="220" height="220" rx="52" fill="url(#coinBadge)"/>
+  <text x="${pad + 158}" y="530" font-size="76" font-weight="700" fill="#0a0a0b" text-anchor="middle">${initials}</text>
+  <text x="${pad + 300}" y="460" font-size="98" font-weight="700" fill="#ffffff">${escapeXml(coin.name)}</text>
+  <text x="${pad + 300}" y="536" font-size="52" font-weight="400" fill="#8a8d93">${escapeXml(coin.symbol)} / USD &#183; Analisis tecnico</text>
 
   <!-- Price -->
-  <text x="${pad}" y="700" font-size="46" font-weight="600" fill="#71747c" letter-spacing="3">PRECIO ACTUAL</text>
-  <text x="${pad}" y="860" font-size="160" font-weight="700" fill="#ffffff">${escapeXml(price)}</text>
+  <text x="${pad + 48}" y="700" font-size="42" font-weight="600" fill="#71747c" letter-spacing="3">PRECIO ACTUAL</text>
+  <text x="${pad + 48}" y="860" font-size="152" font-weight="700" fill="#ffffff">${escapeXml(price)}</text>
   ${
     changePct !== null
-      ? `<rect x="${pad}" y="900" width="${changeLabel.length * 28 + 80}" height="90" rx="45" fill="#16171b"/>
-         <text x="${pad + 40}" y="962" font-size="46" font-weight="600" fill="${changeColor}">${changeLabel}</text>`
+      ? `<rect x="${pad + 48}" y="895" width="${changeLabel.length * 28 + 80}" height="88" rx="44" fill="${changeColor}" fill-opacity="0.14" stroke="${changeColor}" stroke-width="2"/>
+         <text x="${pad + 88}" y="956" font-size="44" font-weight="600" fill="${changeColor}">${changeLabel}</text>`
       : ""
   }
 
   <!-- Banner de estructura -->
-  <rect x="${pad}" y="1040" width="${W - pad * 2}" height="110" rx="24" fill="none" stroke="${bannerColor}" stroke-width="5"/>
-  <text x="${W / 2}" y="1112" font-size="42" font-weight="700" fill="${bannerColor}" text-anchor="middle">${escapeXml(bannerText)}</text>
+  <rect x="${pad}" y="1010" width="${W - pad * 2}" height="112" rx="24" fill="${bannerColor}" fill-opacity="0.12" stroke="${bannerColor}" stroke-width="3.5"/>
+  <text x="${W / 2}" y="1083" font-size="40" font-weight="700" fill="${bannerColor}" text-anchor="middle" letter-spacing="1">${escapeXml(bannerText)}</text>
 
   <!-- Grafico de velas -->
   ${chartContent}
   <line x1="${pad}" y1="3150" x2="${W - pad}" y2="3150" stroke="#1c1d21" stroke-width="4"/>
 
   <!-- RSI + Tendencia, en una sola fila para dejarle todo el espacio al grafico -->
-  <rect x="${pad}" y="3190" width="${(W - pad * 2 - 40) / 2}" height="280" rx="40" fill="${rsiInfo ? rsiInfo.bg : "#16171b"}"/>
+  <rect x="${pad}" y="3190" width="${(W - pad * 2 - 40) / 2}" height="280" rx="40" fill="${rsiInfo ? rsiInfo.bg : "#16171b"}" stroke="#22242b" stroke-width="2"/>
   <text x="${pad + 56}" y="3280" font-size="42" font-weight="600" fill="${rsiInfo ? rsiInfo.fg : "#8a8d93"}" opacity="0.85">RSI (14)</text>
   <text x="${pad + 56}" y="3380" font-size="72" font-weight="700" fill="${rsiInfo ? rsiInfo.fg : "#ffffff"}">${rsiValue} ${rsiInfo ? "&#183; " + rsiInfo.label : ""}</text>
 
-  <rect x="${pad + (W - pad * 2 - 40) / 2 + 40}" y="3190" width="${(W - pad * 2 - 40) / 2}" height="280" rx="40" fill="#16171b"/>
+  <rect x="${pad + (W - pad * 2 - 40) / 2 + 40}" y="3190" width="${(W - pad * 2 - 40) / 2}" height="280" rx="40" fill="#16171b" stroke="#22242b" stroke-width="2"/>
   <text x="${pad + (W - pad * 2 - 40) / 2 + 40 + 56}" y="3280" font-size="42" font-weight="600" fill="#8a8d93">Tendencia</text>
   <text x="${pad + (W - pad * 2 - 40) / 2 + 40 + 56}" y="3380" font-size="72" font-weight="700" fill="${trendInfo ? trendInfo.fg : "#ffffff"}">${trendInfo ? (data.trend === "alcista" ? "&#9650;" : "&#9660;") : ""} ${trendInfo ? trendInfo.label : "N/D"}</text>
 
   <!-- Footer -->
+  <line x1="${pad}" y1="3510" x2="${W - pad}" y2="3510" stroke="#1c1d21" stroke-width="3"/>
   <text x="${pad}" y="3560" font-size="60" font-weight="700" fill="#ffffff">+45 criptomonedas &#183; graficos en vivo &#183; gratis</text>
   <text x="${pad}" y="3630" font-size="52" font-weight="600" fill="${c1}">invest-platform-chi.vercel.app</text>
   <text x="${pad}" y="3700" font-size="38" font-weight="400" fill="#5b5e66">No es asesoria financiera. Informate y decide con responsabilidad.</text>

@@ -4,6 +4,7 @@ import { writeFile, mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { renderReelStages, computeChartInsights } from "./render-reel-background.mjs";
+import { renderCharacterFrames } from "./reel-character.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -192,11 +193,15 @@ function synthesizeNarration(text, outWavPath) {
     const proc = spawn(PIPER_BIN, [
       "--model", PIPER_MODEL,
       "--output_file", outWavPath,
-      // Se bajo la velocidad (length_scale mas alto = mas lento) y se
-      // alargo la pausa entre frases para que la narracion se sienta como
-      // una explicacion paso a paso, no una lectura apurada.
-      "--length_scale", "1.3",
-      "--sentence_silence", "0.5",
+      // Se bajo un poco la velocidad (length_scale mas alto = mas lento) y
+      // se alargo la pausa entre frases para que la narracion se sienta
+      // como una explicacion paso a paso. Se moderó de 1.3 a 1.15: un
+      // valor tan alto como 1.3 hacia que la voz sonara mas cortada y
+      // artificial (cada palabra separada de la siguiente), un efecto que
+      // se reporto como "robotico". 1.15 sigue siendo notablemente mas
+      // lento que la voz por defecto (1.0) pero conserva un flujo natural.
+      "--length_scale", "1.15",
+      "--sentence_silence", "0.45",
     ]);
 
     let stderr = "";
@@ -270,7 +275,12 @@ async function buildReelVideo(stages, segments, narrationPath, outPath) {
   const introSec = 0.8;
   const outroPadSec = 1.5;
   const pulseSec = 0.6;
-  const pulseAmount = 0.05;
+  // Se subio el "salto" de zoom (antes 0.05, casi imperceptible) y se le
+  // agrego un destello breve de brillo sincronizado, para que se note con
+  // claridad el momento en que aparece cada elemento nuevo — el usuario
+  // reporto que la revelacion paso a paso "no se notaba bien".
+  const pulseAmount = 0.09;
+  const flashAmount = 0.22;
 
   const narrationSec = await getAudioDurationSec(narrationPath);
   const durationSec = Math.min(32, Math.max(18, Math.round(introSec + narrationSec + outroPadSec)));
@@ -306,6 +316,38 @@ async function buildReelVideo(stages, segments, narrationPath, outPath) {
     })
   );
   const inputIndex = (name) => videoInputs.indexOf(name);
+
+  // --- Personaje animado (mascota "Toro") ---
+  // Aparece en una esquina del video como si fuera el presentador: gesto
+  // de "idle" (saludando) mientras se dice el precio/RSI/tendencia, gesto
+  // de "explicando" (mano senalando el grafico) durante la estructura
+  // SMC, y "pulgar arriba" en el cierre (entrada/RR). La boca se anima
+  // alternando dos dibujos (abierta/cerrada) a un ritmo fijo, como un
+  // dibujo animado clasico, para dar sensacion de que esta hablando sin
+  // necesitar sincronizacion labial real.
+  const charFrames = await renderCharacterFrames();
+  const charKeys = ["idle_open", "idle_closed", "explain_open", "explain_closed", "thumbsup"];
+  const charPaths = {};
+  await Promise.all(
+    charKeys.map(async (key) => {
+      const p = path.join(tmpDir, `char-${key}.png`);
+      await writeFile(p, charFrames[key]);
+      charPaths[key] = p;
+    })
+  );
+  const charInputIndex = (key) => videoInputs.length + charKeys.indexOf(key);
+
+  const CHAR_SIZE = 260;
+  const CHAR_X = 40;
+  const CHAR_Y = 1270;
+  const flapFrames = 5; // cuadros por gesto de boca (~0.17s a 30fps): ritmo de "hablando"
+  const flapHoldSec = flapFrames / fps;
+
+  const poseForStage = (name) => {
+    if (name === "candles") return "idle";
+    if (name === "full") return "thumbsup";
+    return "explain";
+  };
 
   const segFilters = [];
   const segLabels = [];
@@ -347,22 +389,67 @@ async function buildReelVideo(stages, segments, narrationPath, outPath) {
     const totalFrames = Math.max(1, Math.round(stage.duration * fps));
     const pulseFrames = Math.max(1, Math.min(Math.round(pulseSec * fps), totalFrames));
     const zExpr = `if(lte(on,${pulseFrames}),1.0+${pulseAmount}*sin(PI*on/${pulseFrames}),1.0)`;
+    const flashExpr = `if(lte(t,${pulseSec.toFixed(2)}),${flashAmount.toFixed(2)}*sin(PI*t/${pulseSec.toFixed(2)}),0)`;
     const label = `seg_${stage.name}`;
     segFilters.push(
-      `[${inputIndex(stage.name)}:v]zoompan=z='${zExpr}':d=${totalFrames}:s=1080x1920:fps=${fps},trim=duration=${stage.duration.toFixed(
-        3
-      )}[${label}]`
+      `[${inputIndex(stage.name)}:v]zoompan=z='${zExpr}':d=${totalFrames}:s=1080x1920:fps=${fps},` +
+        `eq=eval=frame:brightness='${flashExpr}',` +
+        `trim=duration=${stage.duration.toFixed(3)}[${label}]`
     );
     segLabels.push(label);
   }
 
   const concatInputs = segLabels.map((l) => `[${l}]`).join("");
   segFilters.push(`${concatInputs}concat=n=${segLabels.length}:v=1:a=0[vraw]`);
-  segFilters.push(`[vraw]eq=eval=frame:brightness='if(lt(t,0.3),0.30*(1-t/0.3),0)',format=yuv420p[v]`);
-  const videoFilter = segFilters.join(";");
+  segFilters.push(`[vraw]eq=eval=frame:brightness='if(lt(t,0.3),0.30*(1-t/0.3),0)'[vbase]`);
 
-  const bellIndex = videoInputs.length;
-  const narrationIndex = videoInputs.length + 1;
+  // Pista del personaje: un segmento por etapa (mismo reparto de tiempo
+  // que el grafico), cada uno con su gesto y su ciclo de boca abierta/
+  // cerrada en loop, recortado a la duracion exacta de esa etapa.
+  const charSegFilters = [];
+  const charSegLabels = [];
+  stagesTimeline.forEach((stage, i) => {
+    const pose = poseForStage(stage.name);
+    const label = `charseg_${i}`;
+    if (pose === "thumbsup") {
+      charSegFilters.push(
+        `[${charInputIndex("thumbsup")}:v]fps=${fps},scale=${CHAR_SIZE}:${CHAR_SIZE},trim=duration=${stage.duration.toFixed(
+          3
+        )},setpts=PTS-STARTPTS[${label}]`
+      );
+    } else {
+      const cycleFrames = flapFrames * 2;
+      const repeats = Math.ceil(stage.duration / (flapHoldSec * 2)) + 2;
+      charSegFilters.push(
+        `[${charInputIndex(`${pose}_open`)}:v]fps=${fps},scale=${CHAR_SIZE}:${CHAR_SIZE},trim=duration=${flapHoldSec.toFixed(
+          4
+        )},setpts=PTS-STARTPTS[co_${i}]`
+      );
+      charSegFilters.push(
+        `[${charInputIndex(`${pose}_closed`)}:v]fps=${fps},scale=${CHAR_SIZE}:${CHAR_SIZE},trim=duration=${flapHoldSec.toFixed(
+          4
+        )},setpts=PTS-STARTPTS[cc_${i}]`
+      );
+      charSegFilters.push(`[co_${i}][cc_${i}]concat=n=2:v=1:a=0[ccycle_${i}]`);
+      charSegFilters.push(
+        `[ccycle_${i}]loop=loop=${repeats}:size=${cycleFrames}:start=0,trim=duration=${stage.duration.toFixed(
+          3
+        )},setpts=PTS-STARTPTS[${label}]`
+      );
+    }
+    charSegLabels.push(label);
+  });
+  const charConcatInputs = charSegLabels.map((l) => `[${l}]`).join("");
+  charSegFilters.push(`${charConcatInputs}concat=n=${charSegLabels.length}:v=1:a=0[charTrack]`);
+
+  // Se superpone el personaje sobre el grafico ya armado, en una esquina,
+  // y recien ahi se pasa a yuv420p (formato final que necesita libx264).
+  const overlayFilter = `[vbase][charTrack]overlay=x=${CHAR_X}:y=${CHAR_Y}:format=auto,format=yuv420p[v]`;
+
+  const videoFilter = [...segFilters, ...charSegFilters, overlayFilter].join(";");
+
+  const bellIndex = videoInputs.length + charKeys.length;
+  const narrationIndex = bellIndex + 1;
 
   // Nota: usamos "aevalsrc" (no el filtro "sine") para generar la campana,
   // porque "sine" en este ffmpeg sale a un volumen interno muy bajo por
@@ -387,20 +474,36 @@ async function buildReelVideo(stages, segments, narrationPath, outPath) {
   const bell = (freq, dur) => `aevalsrc=exprs='${bellExpr(freq)}':s=${sr}:d=${dur}`;
 
   const audioFilters = [
-    // Campanita institucional breve, justo antes de que arranque la narracion
-    `[${bellIndex}:a]afade=t=out:st=0.55:d=0.15,volume=0.8[bell]`,
+    // Campanita institucional breve, un poco mas baja que antes para que
+    // no compita con la voz cuando entra.
+    `[${bellIndex}:a]afade=t=out:st=0.55:d=0.15,volume=0.6[bell]`,
     // Narracion de voz (Piper TTS): se reescala a la frecuencia del
-    // proyecto y se retrasa lo mismo que tarda la campanita en sonar
-    `[${narrationIndex}:a]aresample=${sr},adelay=${introMs}:all=1,volume=1.6[voice]`,
+    // proyecto y se retrasa lo mismo que tarda la campanita en sonar.
+    // Antes se subia el volumen con un simple multiplicador (volume=1.6)
+    // y se dejaba que el limitador final recortara los picos — eso era lo
+    // que hacia que la voz sonara "mala calidad"/distorsionada. Ahora en
+    // vez de eso: se filtra el retumbo grave (highpass), se le da un poco
+    // de calidez (leve realce cerca de 220Hz), un poco mas de presencia
+    // para que se entienda mejor (realce cerca de 3.2kHz), se recorta el
+    // filo mas artificial/metalico tipico de la sintesis de voz (recorte
+    // cerca de 6.5kHz), y se normaliza el volumen con "loudnorm" (el
+    // mismo tipo de normalizacion que usan las plataformas de streaming)
+    // para un nivel parejo y limpio, sin necesidad de subir el volumen a
+    // ciegas.
+    `[${narrationIndex}:a]aresample=${sr},adelay=${introMs}:all=1,highpass=f=90,equalizer=f=220:t=q:w=1:g=2,equalizer=f=3200:t=q:w=1:g=3,equalizer=f=6500:t=q:w=1:g=-3,loudnorm=I=-15:TP=-1.2:LRA=8[voice]`,
     `[bell][voice]amix=inputs=2:duration=longest:normalize=0[amixed]`,
     // Solo un limitador suave como red de seguridad (sin compresor ni
-    // normalizador agresivo, que fue lo que distorsionaba el sonido)
-    `[amixed]afade=t=in:st=0:d=0.2,afade=t=out:st=${(durationSec - 0.8).toFixed(1)}:d=0.8,alimiter=limit=0.95,pan=stereo|c0=c0|c1=c0[a]`,
+    // normalizador agresivo adicional, que fue lo que distorsionaba el
+    // sonido antes)
+    `[amixed]afade=t=in:st=0:d=0.2,afade=t=out:st=${(durationSec - 0.8).toFixed(1)}:d=0.8,alimiter=limit=0.97,pan=stereo|c0=c0|c1=c0[a]`,
   ].join(";");
 
   const args = ["-y"];
   for (const name of videoInputs) {
     args.push("-loop", "1", "-i", imagePaths[name]);
+  }
+  for (const key of charKeys) {
+    args.push("-loop", "1", "-i", charPaths[key]);
   }
   args.push("-f", "lavfi", "-i", bell(659.25, 2.5));
   args.push("-i", narrationPath);
